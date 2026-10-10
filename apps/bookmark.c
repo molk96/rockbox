@@ -1270,6 +1270,28 @@ int bookmark_autoload(const char* file)
     char bm_filename[MAX_PATH];
     char* bookmark;
 
+    /* Content is about to be started from the browser or the playlist
+     * catalog and will replace the current playlist. Save the position of
+     * what is playing now (e.g. an audiobook) first, otherwise it is lost.
+     * Skip this if the new content shares the current bookmark file (same
+     * folder or playlist), so picking another file in the folder still
+     * behaves as before. Respects the autocreate/autoupdate settings. */
+    if (bookmark_is_bookmarkable_state())
+    {
+        char cur_bm[MAX_PATH];
+        char new_bm[MAX_PATH];
+        char *cur_name = playlist_get_name(NULL, global_temp_buffer,
+                                           sizeof(global_temp_buffer));
+
+        if (cur_name &&
+            generate_bookmark_file_name(cur_bm, sizeof(cur_bm), cur_name, -1) &&
+            (!generate_bookmark_file_name(new_bm, sizeof(new_bm), file, -1) ||
+             strcmp(cur_bm, new_bm)))
+        {
+            bookmark_autobookmark(false);
+        }
+    }
+
     if(global_settings.autoloadbookmark == BOOKMARK_NO)
         return BOOKMARK_DONT_RESUME;
 
