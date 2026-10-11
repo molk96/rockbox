@@ -140,6 +140,7 @@ void tree_flush(void);
 void tree_restore(void);
 
 bool bookmark_play(char* resume_file, int index, unsigned long elapsed,
-                   unsigned long offset, int seed, char *filename);
+                   unsigned long offset, int seed, char *filename,
+                   unsigned long rewind_ms);
 
 #endif

@@ -1095,7 +1095,7 @@ static int select_bookmark(const char* bookmark_file_name,
 /* This function parses a bookmark and then plays it.                      */
 /* Returns true on successful bookmark play.                               */
 /* ------------------------------------------------------------------------*/
-static bool play_bookmark(const char* bookmark)
+static bool play_bookmark(const char* bookmark, unsigned long rewind_ms)
 {
     char fnamebuf[MAX_PATH];
     struct resume_info resume_info;
@@ -1119,7 +1119,7 @@ static bool play_bookmark(const char* bookmark)
             return false;
         bool success = bookmark_play(global_temp_buffer, resume_info.resume_index,
                              resume_info.resume_elapsed, resume_info.resume_offset,
-                             resume_info.resume_seed, fnamebuf);
+                             resume_info.resume_seed, fnamebuf, rewind_ms);
         if (success) /* verify we loaded the correct track */
         {
             const struct mp3entry *id3 = audio_current_track();
@@ -1139,6 +1139,119 @@ static bool play_bookmark(const char* bookmark)
     }
 
     return false;
+}
+
+/* ----------------------------------------------------------------------- */
+/* Audiobook / podcast folders                                             */
+/* Automatic bookmarks only apply to paths that contain a folder named     */
+/* "Audiobooks" or "Podcasts" (any case). Everything else (music) is left  */
+/* alone by the automatic bookmark features.                               */
+/* ----------------------------------------------------------------------- */
+static bool is_resume_folder(const char *path)
+{
+    if (!path)
+        return false;
+
+    while (*path)
+    {
+        while (*path == '/')
+            path++;
+        const char *end = path;
+        while (*end && *end != '/')
+            end++;
+        size_t len = end - path;
+        if ((len == 10 && !strncasecmp(path, "Audiobooks", 10)) ||
+            (len == 8 && !strncasecmp(path, "Podcasts", 8)))
+            return true;
+        path = end;
+    }
+    return false;
+}
+
+/* Reads the most recent (first) bookmark of a bookmark file into buf. */
+static bool read_latest_bookmark(const char *bm_filename, char *buf, size_t bufsz)
+{
+    bool ok = false;
+    int fd = open(bm_filename, O_RDONLY);
+    if (fd >= 0)
+    {
+        ok = read_line(fd, buf, bufsz) > 0;
+        close(fd);
+    }
+    return ok;
+}
+
+enum resume_choice
+{
+    RESUME_CHOICE_RESUME = 0,
+    RESUME_CHOICE_REWIND_10M,
+    RESUME_CHOICE_REWIND_30M,
+    RESUME_CHOICE_REWIND_1H,
+    RESUME_CHOICE_START_OVER,
+};
+
+/* Shows "Resume / Rewind / Start over" for an audiobook or podcast.
+ * Returns BOOKMARK_DO_RESUME, BOOKMARK_DONT_RESUME or BOOKMARK_CANCEL. */
+static int resume_with_rewind_menu(const char *bm_filename)
+{
+    static char bookmark[TEMP_BUF_SIZE];
+    static char resume_label[MAX_PATH + 32];
+    char track[MAX_PATH];
+    struct resume_info ri;
+
+    if (!read_latest_bookmark(bm_filename, bookmark, sizeof(bookmark)))
+        return BOOKMARK_DONT_RESUME;
+
+    memset(&ri, 0, sizeof(ri));
+#if defined(HAVE_PITCHCONTROL)
+    ri.pitch = sound_get_pitch();
+    ri.speed = dsp_get_timestretch();
+#endif
+    track[0] = '\0';
+    /* parse into a copy so the stored line stays untouched */
+    if (!parse_bookmark(track, sizeof(track), bookmark, &ri, true))
+        return BOOKMARK_DONT_RESUME;
+    /* parse_bookmark used global_temp_buffer for the playlist path only */
+
+    unsigned long secs = ri.resume_elapsed / 1000;
+    snprintf(resume_label, sizeof(resume_label), "Resume: %s %lu:%02lu:%02lu",
+             track, secs / 3600, (secs / 60) % 60, secs % 60);
+
+    MENUITEM_STRINGLIST(menu_items, "Continue listening", NULL,
+                        resume_label,
+                        "Rewind 10 minutes",
+                        "Rewind 30 minutes",
+                        "Rewind 1 hour",
+                        "Start from the beginning");
+
+    int choice = do_menu(&menu_items, NULL, NULL, false);
+    unsigned long rewind_ms = 0;
+
+    switch (choice)
+    {
+        case RESUME_CHOICE_RESUME:
+            break;
+        case RESUME_CHOICE_REWIND_10M:
+            rewind_ms = 10UL * 60 * 1000;
+            break;
+        case RESUME_CHOICE_REWIND_30M:
+            rewind_ms = 30UL * 60 * 1000;
+            break;
+        case RESUME_CHOICE_REWIND_1H:
+            rewind_ms = 60UL * 60 * 1000;
+            break;
+        case RESUME_CHOICE_START_OVER:
+            return BOOKMARK_DONT_RESUME;
+        default:
+            return BOOKMARK_CANCEL; /* backed out, or USB connected */
+    }
+
+    /* the menu may have used the shared buffer, reload the line */
+    if (!read_latest_bookmark(bm_filename, bookmark, sizeof(bookmark)))
+        return BOOKMARK_DONT_RESUME;
+
+    return play_bookmark(bookmark, rewind_ms) ? BOOKMARK_DO_RESUME
+                                              : BOOKMARK_CANCEL;
 }
 
 /*-------------------------------------------------------------------------*/
@@ -1190,7 +1303,7 @@ int bookmark_load_menu(void)
         ret = select_bookmark(bm_filename, false, &bookmark);
         if (bookmark != NULL)
         {
-            ret = play_bookmark(bookmark) ? BOOKMARK_SUCCESS : BOOKMARK_FAIL;
+            ret = play_bookmark(bookmark, 0) ? BOOKMARK_SUCCESS : BOOKMARK_FAIL;
         }
     }
 
@@ -1212,7 +1325,7 @@ bool bookmark_mrb_load()
     select_bookmark(RECENT_BOOKMARK_FILE, false, &bookmark);
     if (bookmark != NULL)
     {
-        ret = play_bookmark(bookmark);
+        ret = play_bookmark(bookmark, 0);
     }
 
     pop_current_activity();
@@ -1227,33 +1340,21 @@ bool bookmark_mrb_load()
 bool bookmark_autobookmark(bool prompt_ok)
 {
     logf("%s", __func__);
-    bool update;
+    (void)prompt_ok;
 
     if (!bookmark_is_bookmarkable_state())
         return false;
 
+    /* Automatic bookmarks are only for the Audiobooks and Podcasts folders;
+     * music is never bookmarked automatically. */
+    if (!is_resume_folder(playlist_get_name(NULL, global_temp_buffer,
+                                            sizeof(global_temp_buffer))))
+        return false;
+
     audio_pause();    /* first pause playback */
-    update = (global_settings.autoupdatebookmark && bookmark_exists());
 
-    if (update)
-        return write_bookmark(BMARK_CREATE_FILE | BMARK_CHECK_IGNORE);
-
-    switch (global_settings.autocreatebookmark)
-    {
-        case BOOKMARK_YES:
-            return write_bookmark(BMARK_CREATE_FILE | BMARK_CHECK_IGNORE);
-
-        case BOOKMARK_NO:
-            return false;
-
-        case BOOKMARK_RECENT_ONLY_YES:
-            return write_bookmark(BMARK_CHECK_IGNORE);
-    }
-
-    if(prompt_ok)
-        return write_bookmark(BMARK_ASK_USER | BMARK_CHECK_IGNORE);
-
-    return false;
+    /* always save for these folders, whatever the global settings say */
+    return write_bookmark(BMARK_CREATE_FILE | BMARK_CHECK_IGNORE);
 }
 
 /* ----------------------------------------------------------------------- */
@@ -1268,7 +1369,6 @@ int bookmark_autoload(const char* file)
 {
     logf("%s", __func__);
     char bm_filename[MAX_PATH];
-    char* bookmark;
 
     /* Content is about to be started from the browser or the playlist
      * catalog and will replace the current playlist. Save the position of
@@ -1292,7 +1392,8 @@ int bookmark_autoload(const char* file)
         }
     }
 
-    if(global_settings.autoloadbookmark == BOOKMARK_NO)
+    /* Only audiobooks and podcasts resume automatically */
+    if (!is_resume_folder(file))
         return BOOKMARK_DONT_RESUME;
 
     /*Checking to see if a bookmark file exists.*/
@@ -1304,24 +1405,8 @@ int bookmark_autoload(const char* file)
     if(!file_exists(bm_filename))
         return BOOKMARK_DONT_RESUME;
 
-    if(global_settings.autoloadbookmark == BOOKMARK_YES)
-    {
-        return (bookmark_load(bm_filename, true)
-                ? BOOKMARK_DO_RESUME : BOOKMARK_DONT_RESUME);
-    }
-    else
-    {
-        int ret = select_bookmark(bm_filename, true, &bookmark);
-
-        if (bookmark != NULL)
-        {
-            if (!play_bookmark(bookmark))
-                return BOOKMARK_CANCEL;
-            return BOOKMARK_DO_RESUME;
-        }
-
-        return (ret != BOOKMARK_SUCCESS) ? BOOKMARK_CANCEL : BOOKMARK_DONT_RESUME;
-    }
+    /* always ask, whatever the global autoload setting says */
+    return resume_with_rewind_menu(bm_filename);
 }
 
 /* ----------------------------------------------------------------------- */
@@ -1353,7 +1438,7 @@ bool bookmark_load(const char* file, bool autoload)
 
     if (bookmark != NULL)
     {
-        if (!play_bookmark(bookmark))
+        if (!play_bookmark(bookmark, 0))
         {
             /* Selected bookmark not found. */
             if (!autoload)

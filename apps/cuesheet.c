@@ -533,7 +533,7 @@ void browse_cuesheet(struct cuesheet *cue)
                 strmemccpy(global_temp_buffer, cue->file, MAX_PATH);
                 char *fname = strrsplt(global_temp_buffer, '/');
                 char *dirname = fname <= global_temp_buffer + 1 ? "/" : global_temp_buffer;
-                bookmark_play(dirname, 0, elapsed, 0, current_tick, fname);
+                bookmark_play(dirname, 0, elapsed, 0, current_tick, fname, 0);
                 break;
                 } /* ACTION_STD_OK */
 

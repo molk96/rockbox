@@ -54,6 +54,7 @@
 #include "misc.h"
 #include "pathfuncs.h"
 #include "filetree.h"
+#include "metadata.h"
 #include "tagtree.h"
 #ifdef HAVE_RECORDING
 #include "recorder/recording.h"
@@ -1216,8 +1217,52 @@ void tree_mem_init(void)
             core_alloc_ex(cache->max_entries*(sizeof(struct entry)), &ops);
 }
 
+/* Move a resume position back by rewind_ms, stepping into earlier playlist
+ * entries when the current track is not long enough. Stops at the very start
+ * of the playlist. Returns true if the position was changed. */
+static bool bookmark_apply_rewind(int *index, unsigned long *elapsed,
+                                  unsigned long rewind_ms)
+{
+    static struct mp3entry rw_id3;
+    char path[MAX_PATH + 1];
+    bool changed = false;
+
+    while (rewind_ms > 0)
+    {
+        if (*elapsed >= rewind_ms)
+        {
+            *elapsed -= rewind_ms;
+            changed = true;
+            break;
+        }
+
+        rewind_ms -= *elapsed;
+        *elapsed = 0;
+        changed = true;
+
+        if (*index <= 0)
+            break; /* reached the start of the book */
+
+        (*index)--;
+        if (!playlist_peek(*index, path, sizeof(path)))
+            break;
+
+        int fd = open(path, O_RDONLY);
+        if (fd < 0)
+            break;
+        bool ok = get_metadata(&rw_id3, fd, path);
+        close(fd);
+        if (!ok || rw_id3.length == 0)
+            break; /* unknown length: stay at the start of this track */
+
+        *elapsed = rw_id3.length;
+    }
+    return changed;
+}
+
 bool bookmark_play(char *resume_file, int index, unsigned long elapsed,
-                   unsigned long offset, int seed, char *filename)
+                   unsigned long offset, int seed, char *filename,
+                   unsigned long rewind_ms)
 {
     int i;
     char* suffix = strrchr(resume_file, '.');
@@ -1292,6 +1337,8 @@ bool bookmark_play(char *resume_file, int index, unsigned long elapsed,
 
     if (started)
     {
+        if (rewind_ms > 0 && bookmark_apply_rewind(&index, &elapsed, rewind_ms))
+            offset = 0; /* byte offset no longer matches the new position */
         playlist_start(index, elapsed, offset);
         start_wps = true;
     }
