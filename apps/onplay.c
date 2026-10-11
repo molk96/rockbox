@@ -40,6 +40,7 @@
 #include "playlist_viewer.h"
 #include "talk.h"
 #include "onplay.h"
+#include "ambient.h"
 #include "filetypes.h"
 #include "fileop.h"
 #include "open_plugin.h"
@@ -1285,10 +1286,60 @@ MENUITEM_FUNCTION(view_playlist_item, 0, ID2P(LANG_VIEW),
                   view_playlist,
                   onplaymenu_callback, Icon_Playlist);
 
+
+/* ---- Ambient audio layer ------------------------------------------------ */
+static int ambient_item_callback(int action,
+                                 const struct menu_item_ex *this_item,
+                                 struct gui_synclist *this_list);
+
+static int onplay_ambient_play(void)
+{
+    ambient_start(selected_file.path);
+    splash(HZ, ID2P(LANG_AMBIENT_PLAY));
+    return 0; /* stay in the menu, like the other one-shot items */
+}
+
+static int onplay_ambient_stop(void)
+{
+    ambient_stop();
+    splash(HZ, ID2P(LANG_AMBIENT_STOP));
+    return 0;
+}
+
+MENUITEM_FUNCTION(ambient_play_item, 0,
+                  ID2P(LANG_AMBIENT_PLAY), onplay_ambient_play,
+                  ambient_item_callback, Icon_Audio);
+MENUITEM_FUNCTION(ambient_stop_item, 0,
+                  ID2P(LANG_AMBIENT_STOP), onplay_ambient_stop,
+                  ambient_item_callback, Icon_Audio);
+
+static int ambient_item_callback(int action,
+                                 const struct menu_item_ex *this_item,
+                                 struct gui_synclist *this_list)
+{
+    (void)this_list;
+
+    if (action == ACTION_REQUEST_MENUITEM)
+    {
+        if (this_item == &ambient_stop_item)
+            return ambient_is_active() ? action : ACTION_EXIT_MENUITEM;
+
+        /* play: only for folders and audio files */
+        if (selected_file.context != CONTEXT_TREE)
+            return ACTION_EXIT_MENUITEM;
+        if ((selected_file.attr & ATTR_DIRECTORY) ||
+            (selected_file.attr & FILE_ATTR_MASK) == FILE_ATTR_AUDIO)
+            return action;
+        return ACTION_EXIT_MENUITEM;
+    }
+    return action;
+}
+
 /* used when onplay() is not called in the CONTEXT_WPS context */
 MAKE_ONPLAYMENU( tree_onplay_menu, ID2P(LANG_ONPLAY_MENU_TITLE),
            onplaymenu_callback, Icon_file_view_menu,
            &view_playlist_item, &tree_playlist_menu, &cat_playlist_menu,
+           &ambient_play_item, &ambient_stop_item,
            &rename_file_item, &clipboard_cut_item, &clipboard_copy_item,
            &clipboard_paste_item, &delete_file_item, &delete_dir_item,
            &list_viewers_item, &create_dir_item, &properties_item, &track_info_item,

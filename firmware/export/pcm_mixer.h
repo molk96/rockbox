@@ -75,6 +75,7 @@ enum pcm_mixer_channel
     PCM_MIXER_CHAN_USBAUDIO,
 #endif
     PCM_MIXER_CHAN_VOICE,
+    PCM_MIXER_CHAN_AMBIENT,
 #ifndef HAVE_HARDWARE_BEEP
     PCM_MIXER_CHAN_BEEP,
 #endif

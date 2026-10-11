@@ -676,6 +676,10 @@ struct user_settings
     bool talk_battery_level;
     int  talk_mixer_amp; /* Relative volume of voices, MIX_AMP_MPUTE->MIX_AMP_UNITY */
 
+    /* ambient audio layer */
+    int ambient_volume; /* percent */
+    int ambient_mode;   /* enum ambient_modes */
+
     /* file browser sorting */
     bool sort_case; /* dir sort order: 0=case insensitive, 1=sensitive */
     int sort_dir;   /* 0=alpha, 1=date (old first), 2=date (new first) */

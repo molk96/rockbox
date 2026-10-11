@@ -55,3 +55,20 @@ $(CODECDIR)/libmad/%.o: $(RBCODECLIB_DIR)/codecs/libmad/%.S
 	$(SILENT)mkdir -p $(dir $@)
 	$(call PRINTS,CC $(subst $(ROOTDIR)/,,$<)) \
 		$(CC) $(MADFLAGS) -c $< -o $@
+
+# libmad linked into the main firmware for the ambient audio layer
+AMBIENTMADFLAGS = $(filter-out -ffunction-sections, $(filter-out -DCODEC,$(MADFLAGS))) -DROCKBOX_AMBIENT_MP3
+AMBIENTMADLIB := $(CODECDIR)/libmad-ambient.a
+AMBIENTMADLIB_SRC := $(call preprocess, $(RBCODECLIB_DIR)/codecs/libmad/SOURCES)
+AMBIENTMADLIB_OBJ := $(addsuffix .o,$(basename $(subst $(RBCODECLIB_DIR)/codecs/libmad,$(RBCODEC_BLD)/codecs/libmad-ambient,$(AMBIENTMADLIB_SRC))))
+
+$(AMBIENTMADLIB): $(AMBIENTMADLIB_OBJ)
+	$(call PRINTS,AR $(@F))$(AR) rcs $@ $^ >/dev/null
+
+$(CODECDIR)/libmad-ambient/%.o : $(RBCODECLIB_DIR)/codecs/libmad/%.c
+	$(SILENT)mkdir -p $(dir $@)
+	$(call PRINTS,CC $(subst $(ROOTDIR)/,,$<))$(CC) $(AMBIENTMADFLAGS) -c $< -o $@
+
+$(CODECDIR)/libmad-ambient/%.o : $(RBCODECLIB_DIR)/codecs/libmad/%.S
+	$(SILENT)mkdir -p $(dir $@)
+	$(call PRINTS,CC $(subst $(ROOTDIR)/,,$<))$(CC) $(AMBIENTMADFLAGS) -c $< -o $@

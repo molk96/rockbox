@@ -17231,3 +17231,101 @@
     touchscreen: "Touchscreen Flick Shortcuts"
   </voice>
 </phrase>
+<phrase>
+  id: LANG_AMBIENT_VOLUME
+  desc: ambient audio layer volume
+  user: core
+  <source>
+    *: "Ambient Volume"
+  </source>
+  <dest>
+    *: "Ambient Volume"
+  </dest>
+  <voice>
+    *: "Ambient Volume"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_AMBIENT_MODE
+  desc: ambient audio layer play mode
+  user: core
+  <source>
+    *: "Ambient Mode"
+  </source>
+  <dest>
+    *: "Ambient Mode"
+  </dest>
+  <voice>
+    *: "Ambient Mode"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_AMBIENT_MODE_LOOP
+  desc: ambient mode: repeat one track
+  user: core
+  <source>
+    *: "Loop One Track"
+  </source>
+  <dest>
+    *: "Loop One Track"
+  </dest>
+  <voice>
+    *: "Loop One Track"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_AMBIENT_MODE_FOLDER
+  desc: ambient mode: play the folder
+  user: core
+  <source>
+    *: "Play Folder"
+  </source>
+  <dest>
+    *: "Play Folder"
+  </dest>
+  <voice>
+    *: "Play Folder"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_AMBIENT_MODE_SHUFFLE
+  desc: ambient mode: shuffle the folder
+  user: core
+  <source>
+    *: "Shuffle Folder"
+  </source>
+  <dest>
+    *: "Shuffle Folder"
+  </dest>
+  <voice>
+    *: "Shuffle Folder"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_AMBIENT_PLAY
+  desc: context menu: play file or folder as ambient
+  user: core
+  <source>
+    *: "Play as Ambient"
+  </source>
+  <dest>
+    *: "Play as Ambient"
+  </dest>
+  <voice>
+    *: "Play as Ambient"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_AMBIENT_STOP
+  desc: context menu: stop the ambient layer
+  user: core
+  <source>
+    *: "Stop Ambient"
+  </source>
+  <dest>
+    *: "Stop Ambient"
+  </dest>
+  <voice>
+    *: "Stop Ambient"
+  </voice>
+</phrase>

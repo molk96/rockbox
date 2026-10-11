@@ -75,6 +75,7 @@
 #include "iap-usb.h"
 
 #include "voice_thread.h"
+#include "ambient.h"
 
 #if defined(DX50) || defined(DX90)
 #include "governor-ibasso.h"
@@ -1746,6 +1747,14 @@ const struct settings_list settings[] = {
     INT_SETTING(0, talk_mixer_amp, LANG_TALK_MIXER_LEVEL, 100,
         "talk mixer level", UNIT_PERCENT, 0, 100, 5, NULL, NULL, voice_set_mixer_level),
 
+    INT_SETTING(0, ambient_volume, LANG_AMBIENT_VOLUME, 40,
+        "ambient volume", UNIT_PERCENT, 0, 100, 5, NULL, NULL, ambient_set_volume),
+    CHOICE_SETTING(0, ambient_mode, LANG_AMBIENT_MODE, 0, "ambient mode",
+                   "loop,folder,shuffle", NULL, 3,
+                   ID2P(LANG_AMBIENT_MODE_LOOP),
+                   ID2P(LANG_AMBIENT_MODE_FOLDER),
+                   ID2P(LANG_AMBIENT_MODE_SHUFFLE)),
+
 #ifdef HAVE_RECORDING
      /* recording */
     TABLE_SETTING(F_TIME_SETTING | F_ALLOW_ARBITRARY_VALS | F_RECSETTING,
@@ -2414,7 +2423,7 @@ const struct settings_list settings[] = {
                   qs_load_from_cfg, qs_write_to_cfg,
                   qs_is_changed, qs_set_default),
    CUSTOM_SETTING(0, qs_items[QUICKSCREEN_BOTTOM], LANG_BOTTOM_QS_ITEM,
-                  NULL, "qs bottom",
+                  &global_settings.ambient_volume, "qs bottom",
                   qs_load_from_cfg, qs_write_to_cfg,
                   qs_is_changed, qs_set_default),
    OFFON_SETTING(0, shortcuts_replaces_qs, LANG_USE_SHORTCUTS_INSTEAD_OF_QS,

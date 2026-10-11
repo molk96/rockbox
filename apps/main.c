@@ -45,6 +45,7 @@
 #include "serial.h"
 #endif
 #include "audio.h"
+#include "ambient.h"
 #include "settings.h"
 #include "backlight.h"
 #include "status.h"
@@ -462,6 +463,7 @@ static void init(void)
     shortcuts_init();
 
     audio_init();
+    ambient_init();
     talk_announce_voice_invalid(); /* notify user w/ voice prompt if voice file invalid */
     settings_apply_skins();
 
@@ -775,6 +777,7 @@ static void init(void)
 
     CHART(">audio_init");
     audio_init();
+    ambient_init();
     CHART("<audio_init");
     talk_announce_voice_invalid(); /* notify user w/ voice prompt if voice file invalid */
 

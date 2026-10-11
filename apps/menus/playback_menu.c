@@ -62,6 +62,8 @@ static int setcrossfadeonexit_callback(int action,
 MENUITEM_SETTING(shuffle_item, &global_settings.playlist_shuffle, NULL);
 MENUITEM_SETTING(repeat_mode, &global_settings.repeat_mode, NULL);
 MENUITEM_SETTING(play_selected, &global_settings.play_selected, NULL);
+MENUITEM_SETTING(ambient_volume_item, &global_settings.ambient_volume, NULL);
+MENUITEM_SETTING(ambient_mode_item, &global_settings.ambient_mode, NULL);
 
 MENUITEM_SETTING(ff_rewind_accel, &global_settings.ff_rewind_accel, NULL);
 MENUITEM_SETTING(ff_rewind_min_step, &global_settings.ff_rewind_min_step, NULL);
@@ -184,6 +186,7 @@ MENUITEM_SETTING(playback_log, &global_settings.playback_log, NULL);
 MAKE_MENU(playback_settings,ID2P(LANG_PLAYBACK),0,
           Icon_Playback_menu,
           &shuffle_item, &repeat_mode, &play_selected,
+          &ambient_volume_item, &ambient_mode_item,
           &ff_rewind_settings_menu,
 #ifdef HAVE_DISK_STORAGE
           &buffer_margin,
