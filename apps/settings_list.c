@@ -1747,7 +1747,7 @@ const struct settings_list settings[] = {
     INT_SETTING(0, talk_mixer_amp, LANG_TALK_MIXER_LEVEL, 100,
         "talk mixer level", UNIT_PERCENT, 0, 100, 5, NULL, NULL, voice_set_mixer_level),
 
-    INT_SETTING(0, ambient_volume, LANG_AMBIENT_VOLUME, 40,
+    INT_SETTING(0, ambient_volume, LANG_AMBIENT_VOLUME, 25,
         "ambient volume", UNIT_PERCENT, 0, 100, 5, NULL, NULL, ambient_set_volume),
     CHOICE_SETTING(0, ambient_mode, LANG_AMBIENT_MODE, 0, "ambient mode",
                    "loop,folder,shuffle", NULL, 3,

@@ -36,7 +36,7 @@
 
 /* Number of PCM frames queued towards the mixer and their length in
  * stereo samples */
-#define AMB_FRAMES          8
+#define AMB_FRAMES          24
 #define AMB_FRAME_SAMPLES   1024
 
 #define AMB_INBUF_SIZE      8192
@@ -98,8 +98,10 @@ static int amb_cur_n;
 static uint32_t amb_phase;
 static int32_t amb_prev_l, amb_prev_r;
 static unsigned int amb_src_rate;
+static int64_t amb_acc_l, amb_acc_r;
+static uint32_t amb_acc_w;
 
-static int amb_volume = 40;
+static int amb_volume = 25;
 
 /* ---- PCM ring (same scheme as the voice thread) ---------------------- */
 
@@ -187,7 +189,7 @@ static void amb_emit(int16_t l, int16_t r)
         amb_cur_pcm = NULL;
         amb_cur_n = 0;
         /* start once a couple of frames are ready */
-        if (amb_unplayed() >= 2)
+        if (amb_unplayed() >= 6)
             amb_start_playback();
     }
 }
@@ -258,6 +260,8 @@ static bool amb_open_track(const char *path)
     amb_eof = false;
     amb_phase = 0;
     amb_prev_l = amb_prev_r = 0;
+    amb_acc_l = amb_acc_r = 0;
+    amb_acc_w = 0;
     amb_src_rate = 0;
     return true;
 }
@@ -311,25 +315,60 @@ static bool amb_decode_step(void)
     {
         amb_src_rate = src;
         amb_phase = 0;
+        amb_acc_l = amb_acc_r = 0;
+        amb_acc_w = 0;
     }
     uint32_t step = ((uint32_t)src << 16) / dst;
     bool stereo = amb_synth.pcm.channels == 2;
+    uint32_t inv = 0;
+    if (step > 65536)
+        inv = 0x40000000u / (step >> 6); /* ~ 2^36 / step */
 
     for (unsigned int i = 0; i < amb_synth.pcm.length; i++)
     {
         int32_t l = amb_scale(amb_synth.pcm.samples[0][i]);
         int32_t r = stereo ? amb_scale(amb_synth.pcm.samples[1][i]) : l;
 
-        while (amb_phase < 65536)
+        if (step > 65536)
         {
-            int32_t ol = amb_prev_l + (((l - amb_prev_l) * (int32_t)amb_phase) >> 16);
-            int32_t or_ = amb_prev_r + (((r - amb_prev_r) * (int32_t)amb_phase) >> 16);
-            amb_emit((int16_t)ol, (int16_t)or_);
-            amb_phase += step;
+            /* downsampling: box filter (area average) against aliasing */
+            uint32_t w = 65536;
+            while (w > 0)
+            {
+                uint32_t take = step - amb_acc_w;
+                if (take > w)
+                    take = w;
+                amb_acc_l += (int64_t)l * take;
+                amb_acc_r += (int64_t)r * take;
+                amb_acc_w += take;
+                w -= take;
+                if (amb_acc_w >= step)
+                {
+                    int32_t ol = (int32_t)((amb_acc_l * inv) >> 36);
+                    int32_t or_ = (int32_t)((amb_acc_r * inv) >> 36);
+                    if (ol > 32767) ol = 32767; else if (ol < -32768) ol = -32768;
+                    if (or_ > 32767) or_ = 32767; else if (or_ < -32768) or_ = -32768;
+                    amb_emit((int16_t)ol, (int16_t)or_);
+                    amb_acc_l = amb_acc_r = 0;
+                    amb_acc_w = 0;
+                }
+            }
         }
-        amb_phase -= 65536;
-        amb_prev_l = l;
-        amb_prev_r = r;
+        else
+        {
+            while (amb_phase < 65536)
+            {
+                int32_t ol = amb_prev_l +
+                    (int32_t)(((int64_t)(l - amb_prev_l) * amb_phase) >> 16);
+                int32_t or_ = amb_prev_r +
+                    (int32_t)(((int64_t)(r - amb_prev_r) * amb_phase) >> 16);
+                amb_emit((int16_t)ol, (int16_t)or_);
+                amb_phase += step;
+            }
+            amb_phase -= 65536;
+            amb_prev_l = l;
+            amb_prev_r = r;
+        }
 
         if (amb_interrupted)
             return true;
@@ -473,8 +512,15 @@ static bool amb_next_track(void)
 
 /* ---- Thread ------------------------------------------------------------- */
 
+static bool amb_boosted;
+
 static void amb_halt(void)
 {
+    if (amb_boosted)
+    {
+        amb_boosted = false;
+        cpu_boost(false);
+    }
     amb_active = false;
     amb_main_seen = false;
     amb_paused = false;
@@ -537,6 +583,11 @@ static void amb_thread(void)
             amb_active = amb_load_request();
             if (!amb_active)
                 amb_halt();
+            else if (!amb_boosted)
+            {
+                amb_boosted = true;
+                cpu_boost(true);
+            }
             continue;
         }
 
@@ -575,7 +626,7 @@ void ambient_init(void)
     queue_init(&amb_queue, false);
     amb_thread_id = create_thread(amb_thread, amb_stack, sizeof (amb_stack), 0,
                                   amb_thread_name
-                                  IF_PRIO(, PRIORITY_PLAYBACK) IF_COP(, CPU));
+                                  IF_PRIO(, PRIORITY_PLAYBACK - 2) IF_COP(, CPU));
 }
 
 bool ambient_start(const char *path)
