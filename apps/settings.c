@@ -960,6 +960,7 @@ void settings_apply(bool read_disk)
     storage_spindown(global_settings.disk_spindown);
 #endif
     set_poweroff_timeout(global_settings.poweroff);
+    global_settings.sleep_preset = 0;
     if (global_settings.sleeptimer_on_startup)
         set_sleeptimer_duration(global_settings.sleeptimer_duration);
     set_keypress_restarts_sleep_timer(

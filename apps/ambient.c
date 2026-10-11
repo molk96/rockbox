@@ -32,6 +32,8 @@
 #include "pcm_mixer.h"
 #include "settings.h"
 #include "ambient.h"
+#include "sound.h"
+#include "powermgmt.h"
 #include "codecs/libmad/mad.h"
 
 /* Number of PCM frames queued towards the mixer and their length in
@@ -103,6 +105,19 @@ static uint32_t amb_acc_w;
 
 static int amb_volume = 25;
 
+/* Fading of the ambient layer. amb_gain is 0..65536 and is multiplied into
+ * the channel amplitude; it is moved towards amb_gain_target every 20 ms. */
+enum { AMB_AFTER_NONE, AMB_AFTER_HALT, AMB_AFTER_PAUSE };
+#define AMB_FADE_IN_STEP    873   /* about 1.5 s */
+#define AMB_FADE_OUT_STEP   873   /* about 1.5 s */
+#define AMB_FADE_PAUSE_STEP 3277  /* about 0.4 s */
+static unsigned int amb_gain;
+static unsigned int amb_gain_target = 65536;
+static unsigned int amb_gain_step = AMB_FADE_IN_STEP;
+static int amb_after = AMB_AFTER_NONE;
+static bool amb_fade_done;
+static long amb_next_fade;
+
 /* ---- PCM ring (same scheme as the voice thread) ---------------------- */
 
 static unsigned int amb_unplayed(void)
@@ -124,6 +139,7 @@ static void amb_pcm_callback(const void **start, size_t *size)
 static void amb_apply_volume(void)
 {
     unsigned int amp = (unsigned int)amb_volume * MIX_AMP_UNITY / 100;
+    amp = ((amp >> 4) * (amb_gain >> 4)) >> 8;
     mixer_channel_set_amplitude(PCM_MIXER_CHAN_AMBIENT, amp);
 }
 
@@ -151,13 +167,48 @@ static void amb_stop_playback(void)
     amb_cur_n = 0;
 }
 
+static void amb_fade_to(unsigned int target, unsigned int step, int after)
+{
+    amb_gain_target = target;
+    amb_gain_step = step;
+    amb_after = after;
+    amb_fade_done = false;
+}
+
+static void amb_fade_tick(void)
+{
+    if (!TIME_AFTER(current_tick, amb_next_fade))
+        return;
+    amb_next_fade = current_tick + HZ / 50;
+
+    if (amb_gain == amb_gain_target)
+        return;
+
+    if (amb_gain < amb_gain_target)
+    {
+        amb_gain += amb_gain_step;
+        if (amb_gain > amb_gain_target)
+            amb_gain = amb_gain_target;
+    }
+    else if (amb_gain <= amb_gain_target + amb_gain_step)
+        amb_gain = amb_gain_target;
+    else
+        amb_gain -= amb_gain_step;
+
+    amb_apply_volume();
+
+    if (amb_gain == amb_gain_target && amb_after != AMB_AFTER_NONE)
+        amb_fade_done = true;
+}
+
 /* Returns a free frame or NULL if a message arrived while waiting */
 static int16_t *amb_get_free_frame(void)
 {
     while (amb_unplayed() >= AMB_FRAMES)
     {
         amb_start_playback();
-        if (!queue_empty(&amb_queue))
+        amb_fade_tick();
+        if (!queue_empty(&amb_queue) || amb_fade_done)
         {
             amb_interrupted = true;
             return NULL;
@@ -510,6 +561,69 @@ static bool amb_next_track(void)
     return amb_open_current();
 }
 
+/* ---- Sleep timer fade --------------------------------------------------- */
+
+/* During the last SLEEP_FADE_SECS of the sleep timer the master volume is
+ * lowered towards its minimum. Because the ambient layer goes through the
+ * same mixer and DAC, audiobook and ambient fade together. The saved volume
+ * (global_status.volume) is put back before the settings are written. */
+#define SLEEP_FADE_SECS 30
+
+static bool sf_active;
+static int sf_base;
+static int sf_last;
+static long sf_next;
+
+void ambient_sleepfade_restore(bool hardware)
+{
+    if (!sf_active)
+        return;
+    sf_active = false;
+    if (hardware)
+        sound_set_volume(sf_base);
+    else
+        global_status.volume = sf_base;
+}
+
+static void sleepfade_poll(void)
+{
+    if (!TIME_AFTER(current_tick, sf_next))
+        return;
+    sf_next = current_tick + HZ / 4;
+
+    if (get_sleep_timer_active() && get_sleep_timer() <= SLEEP_FADE_SECS)
+    {
+        int rem = get_sleep_timer();
+        int min = sound_min(SOUND_VOLUME);
+
+        if (!sf_active)
+        {
+            sf_active = true;
+            sf_base = global_status.volume;
+        }
+        else if (global_status.volume != sf_last)
+            sf_base = global_status.volume; /* the user changed the volume */
+
+        int v = sf_base - (sf_base - min) * (SLEEP_FADE_SECS - rem)
+                          / SLEEP_FADE_SECS;
+        sound_set_volume(v);
+        sf_last = global_status.volume;
+    }
+    else if (sf_active)
+    {
+        ambient_sleepfade_restore(true);
+    }
+}
+
+/* Called when the quick screen sleep timer item changes: 0=off */
+void sleep_preset_changed(int index)
+{
+    static const int minutes[] = { 0, 15, 30, 60 };
+    if (index < 0 || index > 3)
+        return;
+    set_sleeptimer_duration(minutes[index]);
+}
+
 /* ---- Thread ------------------------------------------------------------- */
 
 static bool amb_boosted;
@@ -522,6 +636,8 @@ static void amb_halt(void)
         cpu_boost(false);
     }
     amb_active = false;
+    amb_gain = 0;
+    amb_fade_to(65536, AMB_FADE_IN_STEP, AMB_AFTER_NONE);
     amb_main_seen = false;
     amb_paused = false;
     amb_interrupted = false;
@@ -541,14 +657,20 @@ static void amb_follow_main(void)
     {
         amb_main_seen = true;
         bool main_paused = (status & AUDIO_STATUS_PAUSE) != 0;
-        if (main_paused && !amb_paused)
+        if (main_paused)
         {
-            amb_paused = true;
-            mixer_channel_play_pause(PCM_MIXER_CHAN_AMBIENT, false);
+            if (!amb_paused && amb_after == AMB_AFTER_NONE)
+                amb_fade_to(0, AMB_FADE_PAUSE_STEP, AMB_AFTER_PAUSE);
         }
-        else if (!main_paused && amb_paused)
+        else if (amb_after == AMB_AFTER_PAUSE)
+        {
+            /* resumed before the fade finished */
+            amb_fade_to(65536, AMB_FADE_IN_STEP, AMB_AFTER_NONE);
+        }
+        else if (amb_paused)
         {
             amb_paused = false;
+            amb_fade_to(65536, AMB_FADE_IN_STEP, AMB_AFTER_NONE);
             if (mixer_channel_status(PCM_MIXER_CHAN_AMBIENT) == CHANNEL_PAUSED)
                 mixer_channel_play_pause(PCM_MIXER_CHAN_AMBIENT, true);
             else
@@ -557,7 +679,11 @@ static void amb_follow_main(void)
     }
     else if (amb_main_seen)
     {
-        amb_halt(); /* the player was stopped */
+        /* the player was stopped: fade out, then halt */
+        if (amb_paused)
+            amb_halt();
+        else if (amb_after != AMB_AFTER_HALT)
+            amb_fade_to(0, AMB_FADE_OUT_STEP, AMB_AFTER_HALT);
     }
 }
 
@@ -568,11 +694,18 @@ static void amb_thread(void)
     while (1)
     {
         queue_wait_w_tmo(&amb_queue, &ev,
-                         amb_active ? TIMEOUT_NOBLOCK : TIMEOUT_BLOCK);
+                         amb_active ? TIMEOUT_NOBLOCK : HZ / 4);
+        sleepfade_poll();
 
         if (ev.id == Q_AMBIENT_STOP)
         {
-            amb_halt();
+            if (amb_active && !amb_paused)
+            {
+                if (amb_after != AMB_AFTER_HALT)
+                    amb_fade_to(0, AMB_FADE_OUT_STEP, AMB_AFTER_HALT);
+            }
+            else
+                amb_halt();
             continue;
         }
         if (ev.id == Q_AMBIENT_PLAY)
@@ -598,6 +731,23 @@ static void amb_thread(void)
         amb_follow_main();
         if (!amb_active)
             continue;
+        amb_fade_tick();
+        if (amb_fade_done)
+        {
+            int after = amb_after;
+            amb_fade_done = false;
+            amb_after = AMB_AFTER_NONE;
+            if (after == AMB_AFTER_HALT)
+            {
+                amb_halt();
+                continue;
+            }
+            if (after == AMB_AFTER_PAUSE)
+            {
+                amb_paused = true;
+                mixer_channel_play_pause(PCM_MIXER_CHAN_AMBIENT, false);
+            }
+        }
 
         if (amb_paused)
         {

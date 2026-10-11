@@ -679,6 +679,7 @@ struct user_settings
     /* ambient audio layer */
     int ambient_volume; /* percent */
     int ambient_mode;   /* enum ambient_modes */
+    int sleep_preset;   /* quick screen sleep timer: 0=off,1=15,2=30,3=60 min */
 
     /* file browser sorting */
     bool sort_case; /* dir sort order: 0=case insensitive, 1=sensitive */

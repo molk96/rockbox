@@ -31,4 +31,7 @@ bool ambient_is_active(void);
 /* percent 0..100, relative to full scale */
 void ambient_set_volume(int percent);
 
+void ambient_sleepfade_restore(bool hardware);
+void sleep_preset_changed(int index);
+
 #endif /* _AMBIENT_H */

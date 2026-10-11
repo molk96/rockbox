@@ -89,6 +89,7 @@
 #include "icons.h"
 #endif /* !__PCTOOL__ */
 #include "bookmark.h"
+#include "ambient.h"
 #include "wps.h"
 #include "playback.h"
 #include "voice_thread.h"
@@ -363,6 +364,7 @@ static bool clean_shutdown(enum shutdown_type sd_type,
     if (!global_settings.show_shutdown_message && get_sleep_timer_active())
         talk_disable(true);
 
+    ambient_sleepfade_restore(false); /* don't save a faded-out volume */
     status_save(true);
 
 #if CONFIG_CHARGING && !defined(HAVE_POWEROFF_WHILE_CHARGING)

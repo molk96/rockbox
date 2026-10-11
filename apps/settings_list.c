@@ -1754,6 +1754,9 @@ const struct settings_list settings[] = {
                    ID2P(LANG_AMBIENT_MODE_LOOP),
                    ID2P(LANG_AMBIENT_MODE_FOLDER),
                    ID2P(LANG_AMBIENT_MODE_SHUFFLE)),
+    CHOICE_SETTING(0, sleep_preset, LANG_SLEEP_TIMER, 0, "sleep preset",
+                   "off,15,30,60", sleep_preset_changed, 4,
+                   ID2P(LANG_OFF), "15 min", "30 min", "60 min"),
 
 #ifdef HAVE_RECORDING
      /* recording */
@@ -2411,7 +2414,7 @@ const struct settings_list settings[] = {
 
 #ifdef HAVE_QUICKSCREEN
    CUSTOM_SETTING(0, qs_items[QUICKSCREEN_TOP], LANG_TOP_QS_ITEM,
-                  NULL, "qs top",
+                  &global_settings.sleep_preset, "qs top",
                   qs_load_from_cfg, qs_write_to_cfg,
                   qs_is_changed, qs_set_default),
    CUSTOM_SETTING(0, qs_items[QUICKSCREEN_LEFT], LANG_LEFT_QS_ITEM,
