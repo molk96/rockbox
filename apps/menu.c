@@ -44,6 +44,7 @@
 #include "talk.h"
 #include "lang.h"
 #include "misc.h"
+#include "splash.h"
 #include "action.h"
 #include "menus/exported_menus.h"
 #include "string.h"
