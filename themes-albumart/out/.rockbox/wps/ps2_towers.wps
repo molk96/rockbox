@@ -1,0 +1,38 @@
+# PS2 Towers - album art theme for Creative Zen X-Fi (320x240)
+# Title line: song title tag if present, otherwise the file name (%?it<%it|%fn>)
+%wd
+%X(bg.bmp)
+%Fl(2,14-Adobe-Helvetica-Bold.fnt)
+%Fl(3,12-Adobe-Helvetica.fnt)
+%Fl(4,12-Adobe-Helvetica.fnt)
+%Fl(5,16-Terminus-Bold.fnt)
+%xl(N,noart.bmp,0,0)
+# album art (120x120) with fallback
+%V(14,32,120,120,-)
+%Cl(0,0,120,120,c,c)
+%?C<%Cd|%xd(N)>
+# progress
+%V(14,170,292,4,-)
+%Vf(78BEFF)
+%pb(0,0,292,4,noborder)
+%V(152,34,160,18,2)
+%Vf(EBF4FF)
+%s%?it<%it|%fn>
+%V(152,62,160,15,3)
+%Vf(96C3FF)
+%s%?ia<%ia|%?iA<%iA|Unknown artist>>
+%V(152,82,160,15,3)
+%Vf(6496E6)
+%s%?id<%id|%?d(1)<%d(1)|Unknown album>>
+%V(152,126,60,20,5)
+%Vf(C8E1FF)
+%pc
+%V(212,130,100,14,4)
+%Vf(6496E6)
+/ %pt
+%V(14,184,150,14,4)
+%Vf(6EA0EB)
+Track %pp / %pe
+%V(206,184,100,14,4)
+%Vf(6EA0EB)
+%arVol %pv dB

@@ -1,0 +1,40 @@
+# Terminal Green - album art theme for Creative Zen X-Fi (320x240)
+# Title line: song title tag if present, otherwise the file name (%?it<%it|%fn>)
+%wd
+%X(bg.bmp)
+%Fl(2,14-Terminus-Bold.fnt)
+%Fl(3,14-Terminus.fnt)
+%Fl(4,12-Terminus.fnt)
+%xl(N,noart.bmp,0,0)
+# album art (120x120) with fallback
+%V(12,34,120,120,-)
+%Cl(0,0,120,120,c,c)
+%?C<%Cd|%xd(N)>
+# progress
+%V(14,196,292,7,-)
+%Vf(3CFF5A)
+%pb(0,0,292,7,noborder)
+%V(208,3,106,13,4)
+%Vf(000802)
+%ar%pp/%pe
+%V(148,45,164,18,2)
+%Vf(3CFF5A)
+%s%?it<%it|%fn>
+%V(148,83,164,16,3)
+%Vf(3CFF5A)
+%s%?ia<%ia|%?iA<%iA|Unknown artist>>
+%V(148,117,164,16,3)
+%Vf(3CFF5A)
+%s%?id<%id|%?d(1)<%d(1)|Unknown album>>
+%V(148,140,164,14,4)
+%Vf(146E28)
+%fc  %fb kbps
+%V(12,176,100,14,3)
+%Vf(3CFF5A)
+%pc
+%V(208,176,100,14,3)
+%Vf(3CFF5A)
+%ar-%pr
+%V(12,214,296,14,4)
+%Vf(146E28)
+%?mp<[STOP]|[PLAY]|[PAUSE]|[FF]|[REW]>  VOL %pv dB

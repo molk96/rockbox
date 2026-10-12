@@ -1,0 +1,31 @@
+# Win95 Classic - album art theme for Creative Zen X-Fi (320x240)
+# Title line: song title tag if present, otherwise the file name (%?it<%it|%fn>)
+%wd
+%X(bg.bmp)
+%Fl(2,12-Adobe-Helvetica-Bold.fnt)
+%Fl(3,12-Adobe-Helvetica.fnt)
+%Fl(4,14-Terminus.fnt)
+%xl(N,noart.bmp,0,0)
+# album art (120x120) with fallback
+%V(12,32,120,120,-)
+%Cl(0,0,120,120,c,c)
+%?C<%Cd|%xd(N)>
+# progress
+%V(12,170,296,9,-)
+%Vf(000080)
+%pb(0,0,296,9,noborder)
+%V(150,45,156,14,2)
+%Vf(000000)
+%s%?it<%it|%fn>
+%V(150,79,156,14,3)
+%Vf(000000)
+%s%?ia<%ia|%?iA<%iA|Unknown artist>>
+%V(150,113,156,14,3)
+%Vf(000000)
+%s%?id<%id|%?d(1)<%d(1)|Unknown album>>
+%V(154,139,152,16,4)
+%Vf(00FF00)
+%ac%pc / %pt
+%V(14,224,292,12,3)
+%Vf(000000)
+Track %pp of %pe     %?mp<Stopped|Playing|Paused|Fast forward|Rewind>     Vol %pv dB

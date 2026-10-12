@@ -1,0 +1,38 @@
+# PS1 Boot - album art theme for Creative Zen X-Fi (320x240)
+# Title line: song title tag if present, otherwise the file name (%?it<%it|%fn>)
+%wd
+%X(bg.bmp)
+%Fl(2,14-Adobe-Helvetica-Bold.fnt)
+%Fl(3,12-Adobe-Helvetica.fnt)
+%Fl(4,12-Adobe-Helvetica.fnt)
+%Fl(5,16-Terminus-Bold.fnt)
+%xl(N,noart.bmp,0,0)
+# album art (120x120) with fallback
+%V(14,30,120,120,-)
+%Cl(0,0,120,120,c,c)
+%?C<%Cd|%xd(N)>
+# progress
+%V(14,212,292,5,-)
+%Vf(D2D4E1)
+%pb(0,0,292,5,noborder)
+%V(152,52,160,18,2)
+%Vf(F0F0F8)
+%s%?it<%it|%fn>
+%V(152,78,160,15,3)
+%Vf(B9BBC8)
+%s%?ia<%ia|%?iA<%iA|Unknown artist>>
+%V(152,98,160,15,3)
+%Vf(828496)
+%s%?id<%id|%?d(1)<%d(1)|Unknown album>>
+%V(152,128,160,14,4)
+%Vf(828496)
+Track %pp / %pe
+%V(152,142,100,20,5)
+%Vf(EBEBF5)
+%pc
+%V(14,222,150,14,4)
+%Vf(BEC0CD)
+%?mp<STOP|PLAY|PAUSE|FF|REW>
+%V(206,222,100,14,4)
+%Vf(828496)
+%ar%pt

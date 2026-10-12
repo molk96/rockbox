@@ -1,0 +1,37 @@
+# PS1 Memory Card - album art theme for Creative Zen X-Fi (320x240)
+# Title line: song title tag if present, otherwise the file name (%?it<%it|%fn>)
+%wd
+%X(bg.bmp)
+%Fl(2,14-Adobe-Helvetica-Bold.fnt)
+%Fl(3,12-Adobe-Helvetica.fnt)
+%Fl(4,12-Adobe-Helvetica.fnt)
+%xl(N,noart.bmp,0,0)
+# album art (120x120) with fallback
+%V(12,39,120,120,-)
+%Cl(0,0,120,120,c,c)
+%?C<%Cd|%xd(N)>
+# progress
+%V(12,180,296,7,-)
+%Vf(506EE6)
+%pb(0,0,296,7,noborder)
+%V(156,44,148,18,2)
+%Vf(EBEBF5)
+%s%?it<%it|%fn>
+%V(156,70,148,15,3)
+%Vf(B4BEE6)
+%s%?ia<%ia|%?iA<%iA|Unknown artist>>
+%V(156,90,148,15,3)
+%Vf(96A0C8)
+%s%?id<%id|%?d(1)<%d(1)|Unknown album>>
+%V(156,130,148,14,4)
+%Vf(7882B4)
+Track %pp/%pe
+%V(156,144,148,14,4)
+%Vf(7882B4)
+Vol %pv dB
+%V(10,193,100,14,3)
+%Vf(D2D2E1)
+%pc
+%V(210,193,100,14,3)
+%Vf(D2D2E1)
+%ar%pt
