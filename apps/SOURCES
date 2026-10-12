@@ -31,6 +31,7 @@ menus/eq_menu.c
 buffering.c
 voice_thread.c
 ambient.c
+ambient_mp4.c
 rbcodec_helpers.c
 menus/main_menu.c
 menus/playback_menu.c

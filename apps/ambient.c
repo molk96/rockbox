@@ -32,6 +32,7 @@
 #include "pcm_mixer.h"
 #include "settings.h"
 #include "ambient.h"
+#include "ambient_mp4.h"
 #include "sound.h"
 #include "powermgmt.h"
 #include "codecs/libmad/mad.h"
@@ -64,6 +65,8 @@ static unsigned char amb_inbuf[AMB_INBUF_SIZE + 32];
 /* AAC (ADTS) decoder glue, see lib/rbcodec/codecs/libfaad/ambient_aac.c */
 extern int ambient_aac_open(const unsigned char *buf, unsigned int size,
                             unsigned int *rate, unsigned int *channels);
+extern int ambient_aac_open_asc(const unsigned char *asc, unsigned int len,
+                                unsigned int *rate, unsigned int *channels);
 extern int ambient_aac_decode(unsigned char *buf, unsigned int size,
                               unsigned int *consumed, unsigned int *rate,
                               unsigned int *channels, unsigned int *frames,
@@ -71,7 +74,10 @@ extern int ambient_aac_decode(unsigned char *buf, unsigned int size,
 
 #define AMB_AAC_REFILL      4096  /* refill when less than this is buffered */
 #define AMB_AAC_MAX_ERRORS  3000  /* consecutive bad bytes before giving up */
-static bool amb_is_aac;           /* current track is AAC (else MP3) */
+enum amb_kind { AMB_KIND_MP3, AMB_KIND_ADTS, AMB_KIND_MP4 };
+static enum amb_kind amb_kind;    /* what the current track is */
+static struct amb_mp4 amb_mp4;
+static unsigned int amb_mp4_errors;
 static unsigned int amb_aac_pos;
 static unsigned int amb_aac_len;
 static unsigned int amb_aac_errors;
@@ -308,6 +314,43 @@ static bool amb_open_track(const char *path)
     if (amb_fd < 0)
         return false;
 
+    amb_kind = AMB_KIND_MP3;
+    size_t plen0 = strlen(path);
+    bool aac_ext = plen0 > 4 && (!strcasecmp(path + plen0 - 4, ".aac") ||
+                                 !strcasecmp(path + plen0 - 4, ".m4a") ||
+                                 !strcasecmp(path + plen0 - 4, ".m4b"));
+    if (aac_ext)
+    {
+        unsigned char probe[12];
+        bool is_mp4 = read(amb_fd, probe, sizeof (probe)) ==
+                          (ssize_t)sizeof (probe) &&
+                      !memcmp(probe + 4, "ftyp", 4);
+        lseek(amb_fd, 0, SEEK_SET);
+
+        if (is_mp4)
+        {
+            unsigned int rate = 0, channels = 0;
+
+            amb_eof = false;
+            amb_phase = 0;
+            amb_prev_l = amb_prev_r = 0;
+            amb_acc_l = amb_acc_r = 0;
+            amb_acc_w = 0;
+            amb_src_rate = 0;
+            amb_mp4_errors = 0;
+
+            if (!amb_mp4_open(&amb_mp4, amb_fd) ||
+                ambient_aac_open_asc(amb_mp4.asc, amb_mp4.asc_len,
+                                     &rate, &channels) < 0)
+            {
+                amb_close_track();
+                return false;
+            }
+            amb_kind = AMB_KIND_MP4;
+            return true;
+        }
+    }
+
     /* skip an ID3v2 tag so embedded pictures are not parsed as audio */
     if (read(amb_fd, hdr, sizeof (hdr)) == (ssize_t)sizeof (hdr) &&
         !memcmp(hdr, "ID3", 3))
@@ -329,11 +372,9 @@ static bool amb_open_track(const char *path)
     amb_acc_w = 0;
     amb_src_rate = 0;
 
-    size_t plen = strlen(path);
-    amb_is_aac = plen > 4 && !strcasecmp(path + plen - 4, ".aac");
-
-    if (amb_is_aac)
+    if (aac_ext)
     {
+        amb_kind = AMB_KIND_ADTS;
         unsigned int rate = 0, channels = 0;
 
         amb_aac_pos = 0;
@@ -501,7 +542,32 @@ static bool amb_decode_step(void)
     return true;
 }
 
-/* Decode one AAC frame. Returns false at the end of the track. */
+/* Resample and emit decoded AAC output. Always returns true. */
+static bool amb_emit_aac(unsigned int rate, unsigned int channels,
+                         unsigned int frames, const int32_t *left,
+                         const int32_t *right)
+{
+    if (frames == 0 || left == NULL)
+        return true;
+
+    uint32_t step, inv;
+    if (!amb_rate_setup(rate, &step, &inv))
+        return true;
+
+    for (unsigned int i = 0; i < frames; i++)
+    {
+        int32_t l = amb_scale_aac(left[i]);
+        int32_t r = (channels > 1 && right) ? amb_scale_aac(right[i]) : l;
+
+        amb_resample_one(l, r, step, inv);
+
+        if (amb_interrupted)
+            return true;
+    }
+    return true;
+}
+
+/* Decode one ADTS AAC frame. Returns false at the end of the track. */
 static bool amb_decode_step_aac(void)
 {
     if (amb_aac_len < AMB_AAC_REFILL && !amb_eof)
@@ -543,24 +609,30 @@ static bool amb_decode_step_aac(void)
     }
     amb_aac_errors = 0;
 
-    if (frames == 0 || left == NULL)
-        return true;
+    return amb_emit_aac(rate, channels, frames, left, right);
+}
 
-    uint32_t step, inv;
-    if (!amb_rate_setup(rate, &step, &inv))
-        return true;
+/* Decode one sample (AAC frame) of an MP4/M4A file. False at the end. */
+static bool amb_decode_step_mp4(void)
+{
+    int n = amb_mp4_next(&amb_mp4, amb_inbuf, AMB_INBUF_SIZE);
 
-    for (unsigned int i = 0; i < frames; i++)
-    {
-        int32_t l = amb_scale_aac(left[i]);
-        int32_t r = (channels > 1 && right) ? amb_scale_aac(right[i]) : l;
+    if (n == 0)
+        return false;
+    if (n < 0)
+        return ++amb_mp4_errors <= 50;
 
-        amb_resample_one(l, r, step, inv);
+    memset(amb_inbuf + n, 0, 16);
 
-        if (amb_interrupted)
-            return true;
-    }
-    return true;
+    unsigned int consumed = 0, rate = 0, channels = 0, frames = 0;
+    const int32_t *left = NULL, *right = NULL;
+    int rc = ambient_aac_decode(amb_inbuf, n, &consumed, &rate, &channels,
+                                &frames, &left, &right);
+    if (rc < 0)
+        return ++amb_mp4_errors <= 50;
+    amb_mp4_errors = 0;
+
+    return amb_emit_aac(rate, channels, frames, left, right);
 }
 
 /* ---- Track list --------------------------------------------------------- */
@@ -569,7 +641,9 @@ static bool amb_is_mp3(const char *name)
 {
     size_t len = strlen(name);
     return len > 4 && (!strcasecmp(name + len - 4, ".mp3") ||
-                       !strcasecmp(name + len - 4, ".aac"));
+                       !strcasecmp(name + len - 4, ".aac") ||
+                       !strcasecmp(name + len - 4, ".m4a") ||
+                       !strcasecmp(name + len - 4, ".m4b"));
 }
 
 static int amb_name_cmp(const void *a, const void *b)
@@ -892,7 +966,14 @@ static void amb_thread(void)
             continue;
         }
 
-        if (!(amb_is_aac ? amb_decode_step_aac() : amb_decode_step()))
+        bool more;
+        if (amb_kind == AMB_KIND_MP4)
+            more = amb_decode_step_mp4();
+        else if (amb_kind == AMB_KIND_ADTS)
+            more = amb_decode_step_aac();
+        else
+            more = amb_decode_step();
+        if (!more)
         {
             if (!amb_next_track())
                 amb_halt();

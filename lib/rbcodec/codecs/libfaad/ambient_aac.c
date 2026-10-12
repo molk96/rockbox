@@ -44,6 +44,30 @@ int ambient_aac_open(const unsigned char *buf, unsigned int size,
     return (int)skip;
 }
 
+/* Same for raw AAC frames from an MP4 file, given its AudioSpecificConfig.
+ * Returns 0 on success, -1 on failure. */
+int ambient_aac_open_asc(const unsigned char *asc, unsigned int len,
+                         unsigned int *rate, unsigned int *channels)
+{
+    uint32_t sr = 0;
+    uint8_t ch = 0;
+
+    amb_dec = NeAACDecOpen();
+    if (!amb_dec)
+        return -1;
+
+    NeAACDecConfigurationPtr conf = NeAACDecGetCurrentConfiguration(amb_dec);
+    conf->outputFormat = FAAD_FMT_24BIT; /* irrelevant, no conversion done */
+    NeAACDecSetConfiguration(amb_dec, conf);
+
+    if (NeAACDecInit2(amb_dec, (uint8_t *)asc, len, &sr, &ch) != 0)
+        return -1;
+
+    *rate = sr;
+    *channels = ch;
+    return 0;
+}
+
 /* Decodes one frame. Returns -1 on a decode error. The returned sample
  * pointers stay valid until the next call; samples have 29 fraction bits. */
 int ambient_aac_decode(unsigned char *buf, unsigned int size,
