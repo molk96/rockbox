@@ -37,6 +37,11 @@ rockboxlogo.480x149x16.bmp
 rockboxlogo.640x198x16.bmp
 #endif
 
+/* Custom full-screen boot splash for the Creative Zen X-Fi (not the bootloader) */
+#if defined(CREATIVE_ZENXFI) && !defined(BOOTLOADER)
+zenxfisplash.320x240x16.bmp
+#endif
+
 /* The Sony NWZ linux bootloader needs icons to display a menu */
 #if defined(BOOTLOADER)
 #if defined(SONY_NWZ_LINUX)

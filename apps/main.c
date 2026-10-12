@@ -72,6 +72,10 @@
 #include "splash.h"
 #include "eeprom_settings.h"
 #include "icon.h"
+#if defined(CREATIVE_ZENXFI)
+#include "bitmaps/zenxfisplash.h" /* custom full-screen boot splash */
+#define HAVE_ZENXFI_SPLASH
+#endif
 #include "viewport.h"
 #include "skin_engine/skin_engine.h"
 #include "statusbar-skinned.h"
@@ -265,6 +269,23 @@ int show_logo_boot( void )
     else
         lcd_putsxy((LCD_WIDTH/2) - (ver_w/2), 0, version);
     lcd_bmp(&bm_rockboxlogo, (LCD_WIDTH - BMPWIDTH_rockboxlogo) / 2, 16);
+#elif defined(HAVE_ZENXFI_SPLASH)
+    /* Zen X-Fi: full-screen splash. The bottom strip of the image is empty;
+     * the version string goes there without a background box, then the
+     * colours and draw mode are put back as they were. */
+    {
+        unsigned old_fg = lcd_get_foreground();
+        int old_mode = lcd_get_drawmode();
+        lcd_bmp(&bm_zenxfisplash, 0, 0);
+        lcd_set_drawmode(DRMODE_FG);
+        lcd_set_foreground(LCD_RGBPACK(47, 122, 92));
+        if (ver_w > LCD_WIDTH)
+            lcd_putsxy(0, LCD_HEIGHT-font_h, rbversion);
+        else
+            lcd_putsxy((LCD_WIDTH/2) - (ver_w/2), LCD_HEIGHT-font_h, version);
+        lcd_set_drawmode(old_mode);
+        lcd_set_foreground(old_fg);
+    }
 #else
     lcd_bmp(&bm_rockboxlogo, (LCD_WIDTH - BMPWIDTH_rockboxlogo) / 2, 10);
     if (ver_w > LCD_WIDTH)
