@@ -15,7 +15,6 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-#define AMB_MP4_MAX_STSC   64
 #define AMB_MP4_MAX_ASC    64
 #define AMB_MP4_CACHE      512
 
@@ -37,7 +36,7 @@ struct amb_mp4
     off_t stco_off;           /* chunk offset table */
     uint32_t nchunks;
     bool co64;                /* 64 bit chunk offsets */
-    struct { uint32_t first_chunk, spc; } stsc[AMB_MP4_MAX_STSC];
+    off_t stsc_off;           /* sample-to-chunk table, 12 bytes per run */
     uint32_t nstsc;
 
     /* decoder specific config of the track */
@@ -51,7 +50,7 @@ struct amb_mp4
     uint32_t left;            /* samples left in the current chunk */
     uint64_t pos;             /* file offset of the next sample */
 
-    struct amb_mp4_cache c_sz, c_co;
+    struct amb_mp4_cache c_sz, c_co, c_sc;
 };
 
 /* Parse the file. True if an AAC track was found. */

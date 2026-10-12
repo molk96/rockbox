@@ -25,8 +25,8 @@ struct trak_info
     off_t stco_off;
     uint32_t nchunks;
     bool co64;
+    off_t stsc_off;
     uint32_t nstsc;
-    uint32_t stsc_first[AMB_MP4_MAX_STSC], stsc_spc[AMB_MP4_MAX_STSC];
     uint8_t asc[AMB_MP4_MAX_ASC];
     uint32_t asc_len;
 };
@@ -261,19 +261,8 @@ static bool walk(int fd, off_t start, off_t end, int depth, bool in_trak,
         case FOURCC('s','t','s','c'):
             if (in_trak && read_at(fd, payload, b, 8))
             {
-                uint32_t n = be32(b + 4);
-                if (n > AMB_MP4_MAX_STSC)
-                    n = AMB_MP4_MAX_STSC; /* later runs ignored: still fine
-                                             for the usual few runs */
-                for (uint32_t i = 0; i < n; i++)
-                {
-                    uint8_t e[12];
-                    if (!read_at(fd, payload + 8 + 12 * i, e, 12))
-                        break;
-                    cur->stsc_first[i] = be32(e);
-                    cur->stsc_spc[i] = be32(e + 4);
-                    cur->nstsc = i + 1;
-                }
+                cur->nstsc = be32(b + 4);
+                cur->stsc_off = payload + 8;
                 cur->have_stsc = cur->nstsc > 0;
             }
             break;
@@ -316,11 +305,7 @@ bool amb_mp4_open(struct amb_mp4 *m, int fd)
     m->nchunks = found.nchunks;
     m->co64 = found.co64;
     m->nstsc = found.nstsc;
-    for (uint32_t i = 0; i < found.nstsc; i++)
-    {
-        m->stsc[i].first_chunk = found.stsc_first[i];
-        m->stsc[i].spc = found.stsc_spc[i];
-    }
+    m->stsc_off = found.stsc_off;
     memcpy(m->asc, found.asc, found.asc_len);
     m->asc_len = found.asc_len;
     return true;
@@ -340,10 +325,21 @@ int amb_mp4_next(struct amb_mp4 *m, uint8_t *buf, unsigned int bufsize)
         if (c >= m->nchunks)
             return 0;
 
-        while (m->stsc_idx + 1 < m->nstsc &&
-               m->stsc[m->stsc_idx + 1].first_chunk <= c + 1)
+        /* find the run of the sample-to-chunk table this chunk belongs to */
+        uint32_t first, spc;
+        while (m->stsc_idx + 1 < m->nstsc)
+        {
+            if (!table_u32(m->fd, &m->c_sc,
+                           m->stsc_off + 12 * (off_t)(m->stsc_idx + 1), &first))
+                return 0;
+            if (first > c + 1)
+                break;
             m->stsc_idx++;
-        m->left = m->stsc[m->stsc_idx].spc;
+        }
+        if (!table_u32(m->fd, &m->c_sc,
+                       m->stsc_off + 12 * (off_t)m->stsc_idx + 4, &spc))
+            return 0;
+        m->left = spc;
 
         uint32_t hi = 0, lo = 0;
         if (m->co64)
