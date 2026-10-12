@@ -40,6 +40,7 @@ enum shortcut_type {
 };
 
 void shortcuts_add(enum shortcut_type type, const char* value);
+void shortcuts_add_sleeptimer(void);
 void shortcuts_init(void);
 int do_shortcut_menu(void*ignored);
 

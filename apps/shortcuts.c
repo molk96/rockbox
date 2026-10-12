@@ -315,6 +315,22 @@ void shortcuts_add(enum shortcut_type type, const char* value)
     register_storage_idle_func(shortcuts_ata_idle_callback);
 }
 
+/* Shortcut that toggles the sleep timer (data: sleep) */
+void shortcuts_add_sleeptimer(void)
+{
+    struct shortcut* sc = get_shortcut(shortcut_count++, NULL);
+    if (!sc)
+        return;
+    init_shortcut(sc);
+    sc->type = SHORTCUT_TIME;
+    sc->u.timedata.sleep_timeout = -1;
+
+    if (first_idx_to_writeback < 0)
+        first_idx_to_writeback = shortcut_count - 1;
+    overwrite_shortcuts = false;
+    register_storage_idle_func(shortcuts_ata_idle_callback);
+}
+
 static int readline_cb(int n, char *buf, void *parameters)
 {
     (void)n;

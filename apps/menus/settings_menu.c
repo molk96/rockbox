@@ -543,6 +543,7 @@ MENUITEM_SETTING(poweroff, &global_settings.poweroff, NULL);
 MENUITEM_FUNCTION_DYNTEXT(sleeptimer_toggle, 0, toggle_sleeptimer,
                           sleeptimer_getname, sleeptimer_voice, NULL,
                           NULL, Icon_NOICON);
+MENUITEM_SETTING(sleep_preset_item, &global_settings.sleep_preset, NULL);
 MENUITEM_SETTING(sleeptimer_duration,
                  &global_settings.sleeptimer_duration,
                  sleeptimer_duration_cb);
@@ -567,6 +568,7 @@ MAKE_MENU(startup_shutdown_menu, ID2P(LANG_STARTUP_SHUTDOWN),
             &start_screen,
             &poweroff,
             &sleeptimer_toggle,
+            &sleep_preset_item,
             &sleeptimer_duration,
             &sleeptimer_on_startup,
             &keypress_restarts_sleeptimer,

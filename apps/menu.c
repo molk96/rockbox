@@ -598,6 +598,21 @@ int do_menu(const struct menu_item_ex *start_menu, int *start_selected,
                         done = true; /* in case onplay menu contains setting */
                     redraw_lists = true;
                 }
+                else if (type == MT_FUNCTION_CALL &&
+                         temp->function->function == toggle_sleeptimer)
+                {
+                    /* long press on "Start/End Sleep Timer": offer a shortcut */
+                    MENUITEM_STRINGLIST(sleep_op_menu,
+                                        ID2P(LANG_ONPLAY_MENU_TITLE), NULL,
+                                        ID2P(LANG_ADD_TO_FAVES));
+                    int msel = do_menu(&sleep_op_menu, NULL, NULL, false);
+                    if (msel == 0)
+                    {
+                        shortcuts_add_sleeptimer();
+                        splash(HZ, ID2P(LANG_ADD_TO_FAVES));
+                    }
+                    redraw_lists = true;
+                }
             } /* else if (!in_stringlist) */
         }
         else if (action == ACTION_STD_MENU)
