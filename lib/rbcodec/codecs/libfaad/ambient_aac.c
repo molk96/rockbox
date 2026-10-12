@@ -16,6 +16,10 @@
 
 static NeAACDecHandle amb_dec;
 
+/* libfaad copies each frame into a static 2048 byte buffer, 12 bytes of which
+ * are headroom (see bits.c): never hand it more than this at once. */
+#define AMB_FAAD_MAX_BYTES (2048 - 12)
+
 /* Returns the number of bytes of header to skip (>= 0), or -1 if the data is
  * not a raw ADTS/ADIF AAC stream. */
 int ambient_aac_open(const unsigned char *buf, unsigned int size,
@@ -33,6 +37,8 @@ int ambient_aac_open(const unsigned char *buf, unsigned int size,
     conf->outputFormat = FAAD_FMT_24BIT; /* irrelevant, no conversion done */
     NeAACDecSetConfiguration(amb_dec, conf);
 
+    if (size > AMB_FAAD_MAX_BYTES)
+        size = AMB_FAAD_MAX_BYTES;
     skip = NeAACDecInit(amb_dec, (uint8_t *)buf, size, &sr, &ch);
     if (skip < 0)
         return -1;
@@ -79,6 +85,8 @@ int ambient_aac_decode(unsigned char *buf, unsigned int size,
     void *ret;
 
     *frames = 0;
+    if (size > AMB_FAAD_MAX_BYTES)
+        size = AMB_FAAD_MAX_BYTES;
     ret = NeAACDecDecode(amb_dec, &info, buf, size);
     *consumed = info.bytesconsumed;
 
