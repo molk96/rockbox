@@ -271,19 +271,21 @@ $(LINKROM): $(ROMLDS)
 
 # Note: make sure -Wl,--gc-sections comes before -T in the linker options.
 # Having the latter first caused crashes on (at least) mini2g.
-$(BUILDDIR)/rockbox.elf : $$(OBJ) $(FIRMLIB) $(VOICESPEEXLIB) $(AMBIENTMADLIB) $(CORE_LIBS) $$(LINKRAM)
+$(BUILDDIR)/rockbox.elf : $$(OBJ) $(FIRMLIB) $(VOICESPEEXLIB) $(AMBIENTMADLIB) $(AMBIENTAACLIB) $(FAADLIB) $(CODECLIB) $(CORE_LIBS) $$(LINKRAM)
 	$(call PRINTS,LD $(@F))$(CC) $(GCCOPTS) -nostdlib -o $@ $(OBJ) \
 		-L$(BUILDDIR)/firmware \
 		-L$(RBCODEC_BLD)/codecs $(call a2lnk, $(VOICESPEEXLIB)) $(call a2lnk, $(AMBIENTMADLIB)) \
 		-L$(BUILDDIR)/lib $(call a2lnk, $(CORE_LIBS)) \
+		$(call a2lnk, $(AMBIENTAACLIB)) $(call a2lnk, $(FAADLIB)) $(call a2lnk, $(CODECLIB)) \
 		-lgcc $(CORE_LDOPTS) -T$(LINKRAM) \
 		-Wl,-Map,$(BUILDDIR)/rockbox.map
 
-$(BUILDDIR)/rombox.elf : $$(OBJ) $(FIRMLIB) $(VOICESPEEXLIB) $(AMBIENTMADLIB) $(CORE_LIBS) $$(LINKROM)
+$(BUILDDIR)/rombox.elf : $$(OBJ) $(FIRMLIB) $(VOICESPEEXLIB) $(AMBIENTMADLIB) $(AMBIENTAACLIB) $(FAADLIB) $(CODECLIB) $(CORE_LIBS) $$(LINKROM)
 	$(call PRINTS,LD $(@F))$(CC) $(GCCOPTS) -nostdlib -o $@ $(OBJ) \
 		-L$(BUILDDIR)/firmware \
 		-L$(RBCODEC_BLD)/codecs $(call a2lnk, $(VOICESPEEXLIB)) $(call a2lnk, $(AMBIENTMADLIB)) \
 		-L$(BUILDDIR)/lib $(call a2lnk, $(CORE_LIBS)) \
+		$(call a2lnk, $(AMBIENTAACLIB)) $(call a2lnk, $(FAADLIB)) $(call a2lnk, $(CODECLIB)) \
 		-lgcc $(CORE_LDOPTS) -T$(LINKROM) \
 		-Wl,-Map,$(BUILDDIR)/rombox.map
 

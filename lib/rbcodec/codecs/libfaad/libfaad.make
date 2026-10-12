@@ -16,3 +16,17 @@ OTHER_INC += -I$(RBCODECLIB_DIR)/codecs/libfaad
 $(FAADLIB): $(FAADLIB_OBJ)
 	$(SILENT)$(shell rm -f $@)
 	$(call PRINTS,AR $(@F))$(AR) rcs $@ $^ >/dev/null
+
+# glue for the "ambient" audio layer in the main firmware (apps/ambient.c).
+# libfaad.a and libcodec.a are linked into the firmware together with it.
+AMBIENTAACLIB := $(CODECDIR)/libfaad-ambient.a
+AMBIENTAACLIB_OBJ := $(CODECDIR)/libfaad-ambient/ambient_aac.o
+
+$(AMBIENTAACLIB): $(AMBIENTAACLIB_OBJ)
+	$(SILENT)$(shell rm -f $@)
+	$(call PRINTS,AR $(@F))$(AR) rcs $@ $^ >/dev/null
+
+$(CODECDIR)/libfaad-ambient/%.o: $(RBCODECLIB_DIR)/codecs/libfaad/%.c
+	$(SILENT)mkdir -p $(dir $@)
+	$(call PRINTS,CC $(subst $(ROOTDIR)/,,$<))$(CC) \
+		-I$(dir $<) $(CODECFLAGS) -O2 -c $< -o $@

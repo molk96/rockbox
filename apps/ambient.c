@@ -59,7 +59,22 @@ static struct mad_synth amb_synth;
 static mad_fixed_t amb_sbsample[2][36][32] MEM_ALIGN_ATTR;
 static mad_fixed_t amb_overlap[2][32][18] MEM_ALIGN_ATTR;
 static unsigned char amb_main_data[MAD_BUFFER_MDLEN] MEM_ALIGN_ATTR;
-static unsigned char amb_inbuf[AMB_INBUF_SIZE + MAD_BUFFER_GUARD];
+static unsigned char amb_inbuf[AMB_INBUF_SIZE + 32];
+
+/* AAC (ADTS) decoder glue, see lib/rbcodec/codecs/libfaad/ambient_aac.c */
+extern int ambient_aac_open(const unsigned char *buf, unsigned int size,
+                            unsigned int *rate, unsigned int *channels);
+extern int ambient_aac_decode(unsigned char *buf, unsigned int size,
+                              unsigned int *consumed, unsigned int *rate,
+                              unsigned int *channels, unsigned int *frames,
+                              const int32_t **left, const int32_t **right);
+
+#define AMB_AAC_REFILL      4096  /* refill when less than this is buffered */
+#define AMB_AAC_MAX_ERRORS  3000  /* consecutive bad bytes before giving up */
+static bool amb_is_aac;           /* current track is AAC (else MP3) */
+static unsigned int amb_aac_pos;
+static unsigned int amb_aac_len;
+static unsigned int amb_aac_errors;
 
 static struct
 {
@@ -307,14 +322,124 @@ static bool amb_open_track(const char *path)
     else
         lseek(amb_fd, 0, SEEK_SET);
 
-    amb_init_mad();
     amb_eof = false;
     amb_phase = 0;
     amb_prev_l = amb_prev_r = 0;
     amb_acc_l = amb_acc_r = 0;
     amb_acc_w = 0;
     amb_src_rate = 0;
+
+    size_t plen = strlen(path);
+    amb_is_aac = plen > 4 && !strcasecmp(path + plen - 4, ".aac");
+
+    if (amb_is_aac)
+    {
+        unsigned int rate = 0, channels = 0;
+
+        amb_aac_pos = 0;
+        amb_aac_len = 0;
+        amb_aac_errors = 0;
+
+        ssize_t n = read(amb_fd, amb_inbuf, AMB_INBUF_SIZE);
+        if (n <= 0)
+        {
+            amb_close_track();
+            return false;
+        }
+        amb_aac_len = n;
+        memset(amb_inbuf + n, 0, 16);
+
+        int skip = ambient_aac_open(amb_inbuf, amb_aac_len, &rate, &channels);
+        if (skip < 0 || (unsigned int)skip > amb_aac_len)
+        {
+            /* not a raw ADTS/ADIF AAC stream (e.g. an MP4 renamed to .aac) */
+            amb_close_track();
+            return false;
+        }
+        amb_aac_pos = skip;
+        amb_aac_len -= skip;
+    }
+    else
+        amb_init_mad();
     return true;
+}
+
+static inline int16_t amb_scale_aac(int32_t s)
+{
+    /* libfaad output has 29 fraction bits here, 16 bit output has 15 */
+    s += 1L << 13;
+    s >>= 14;
+    if (s > 32767)
+        s = 32767;
+    else if (s < -32768)
+        s = -32768;
+    return (int16_t)s;
+}
+
+/* Prepare the resampler for a source rate. False if there is nothing to do */
+static bool amb_rate_setup(unsigned int src, uint32_t *step, uint32_t *inv)
+{
+    unsigned int dst = mixer_get_frequency();
+    if (src == 0 || dst == 0)
+        return false;
+
+    if (src != amb_src_rate)
+    {
+        amb_src_rate = src;
+        amb_phase = 0;
+        amb_acc_l = amb_acc_r = 0;
+        amb_acc_w = 0;
+    }
+    *step = ((uint32_t)src << 16) / dst;
+    *inv = 0;
+    if (*step > 65536)
+        *inv = 0x40000000u / (*step >> 6); /* ~ 2^36 / step */
+    return true;
+}
+
+/* Resample one input frame and emit the resulting output frames */
+static void amb_resample_one(int32_t l, int32_t r, uint32_t step, uint32_t inv)
+{
+    if (step > 65536)
+    {
+        /* downsampling: box filter (area average) against aliasing */
+        uint32_t w = 65536;
+        while (w > 0)
+        {
+            uint32_t take = step - amb_acc_w;
+            if (take > w)
+                take = w;
+            amb_acc_l += (int64_t)l * take;
+            amb_acc_r += (int64_t)r * take;
+            amb_acc_w += take;
+            w -= take;
+            if (amb_acc_w >= step)
+            {
+                int32_t ol = (int32_t)((amb_acc_l * inv) >> 36);
+                int32_t or_ = (int32_t)((amb_acc_r * inv) >> 36);
+                if (ol > 32767) ol = 32767; else if (ol < -32768) ol = -32768;
+                if (or_ > 32767) or_ = 32767; else if (or_ < -32768) or_ = -32768;
+                amb_emit((int16_t)ol, (int16_t)or_);
+                amb_acc_l = amb_acc_r = 0;
+                amb_acc_w = 0;
+            }
+        }
+    }
+    else
+    {
+        while (amb_phase < 65536)
+        {
+            int32_t ol = amb_prev_l +
+                (int32_t)(((int64_t)(l - amb_prev_l) * amb_phase) >> 16);
+            int32_t or_ = amb_prev_r +
+                (int32_t)(((int64_t)(r - amb_prev_r) * amb_phase) >> 16);
+            amb_emit((int16_t)ol, (int16_t)or_);
+            amb_phase += step;
+        }
+        amb_phase -= 65536;
+        amb_prev_l = l;
+        amb_prev_r = r;
+    }
 }
 
 /* Decode one MP3 frame and emit resampled stereo PCM.
@@ -358,68 +483,79 @@ static bool amb_decode_step(void)
     mad_synth_frame(&amb_synth, &amb_frame);
 
     unsigned int src = amb_synth.pcm.samplerate;
-    unsigned int dst = mixer_get_frequency();
-    if (src == 0 || dst == 0)
+    uint32_t step, inv;
+    if (!amb_rate_setup(src, &step, &inv))
         return true;
-
-    if (src != amb_src_rate)
-    {
-        amb_src_rate = src;
-        amb_phase = 0;
-        amb_acc_l = amb_acc_r = 0;
-        amb_acc_w = 0;
-    }
-    uint32_t step = ((uint32_t)src << 16) / dst;
     bool stereo = amb_synth.pcm.channels == 2;
-    uint32_t inv = 0;
-    if (step > 65536)
-        inv = 0x40000000u / (step >> 6); /* ~ 2^36 / step */
 
     for (unsigned int i = 0; i < amb_synth.pcm.length; i++)
     {
         int32_t l = amb_scale(amb_synth.pcm.samples[0][i]);
         int32_t r = stereo ? amb_scale(amb_synth.pcm.samples[1][i]) : l;
 
-        if (step > 65536)
-        {
-            /* downsampling: box filter (area average) against aliasing */
-            uint32_t w = 65536;
-            while (w > 0)
-            {
-                uint32_t take = step - amb_acc_w;
-                if (take > w)
-                    take = w;
-                amb_acc_l += (int64_t)l * take;
-                amb_acc_r += (int64_t)r * take;
-                amb_acc_w += take;
-                w -= take;
-                if (amb_acc_w >= step)
-                {
-                    int32_t ol = (int32_t)((amb_acc_l * inv) >> 36);
-                    int32_t or_ = (int32_t)((amb_acc_r * inv) >> 36);
-                    if (ol > 32767) ol = 32767; else if (ol < -32768) ol = -32768;
-                    if (or_ > 32767) or_ = 32767; else if (or_ < -32768) or_ = -32768;
-                    amb_emit((int16_t)ol, (int16_t)or_);
-                    amb_acc_l = amb_acc_r = 0;
-                    amb_acc_w = 0;
-                }
-            }
-        }
+        amb_resample_one(l, r, step, inv);
+
+        if (amb_interrupted)
+            return true;
+    }
+    return true;
+}
+
+/* Decode one AAC frame. Returns false at the end of the track. */
+static bool amb_decode_step_aac(void)
+{
+    if (amb_aac_len < AMB_AAC_REFILL && !amb_eof)
+    {
+        if (amb_aac_pos > 0 && amb_aac_len > 0)
+            memmove(amb_inbuf, amb_inbuf + amb_aac_pos, amb_aac_len);
+        amb_aac_pos = 0;
+
+        ssize_t n = read(amb_fd, amb_inbuf + amb_aac_len,
+                         AMB_INBUF_SIZE - amb_aac_len);
+        if (n <= 0)
+            amb_eof = true;
         else
-        {
-            while (amb_phase < 65536)
-            {
-                int32_t ol = amb_prev_l +
-                    (int32_t)(((int64_t)(l - amb_prev_l) * amb_phase) >> 16);
-                int32_t or_ = amb_prev_r +
-                    (int32_t)(((int64_t)(r - amb_prev_r) * amb_phase) >> 16);
-                amb_emit((int16_t)ol, (int16_t)or_);
-                amb_phase += step;
-            }
-            amb_phase -= 65536;
-            amb_prev_l = l;
-            amb_prev_r = r;
-        }
+            amb_aac_len += n;
+    }
+
+    if (amb_aac_len == 0)
+        return false;
+
+    /* libfaad reads a few bytes past the end of the data */
+    memset(amb_inbuf + amb_aac_pos + amb_aac_len, 0, 16);
+
+    unsigned int consumed = 0, rate = 0, channels = 0, frames = 0;
+    const int32_t *left = NULL, *right = NULL;
+    int rc = ambient_aac_decode(amb_inbuf + amb_aac_pos, amb_aac_len,
+                                &consumed, &rate, &channels, &frames,
+                                &left, &right);
+
+    if (consumed == 0 || consumed > amb_aac_len)
+        consumed = 1; /* bad data: resynchronise byte by byte */
+    amb_aac_pos += consumed;
+    amb_aac_len -= consumed;
+
+    if (rc < 0)
+    {
+        if (++amb_aac_errors > AMB_AAC_MAX_ERRORS)
+            return false;
+        return true;
+    }
+    amb_aac_errors = 0;
+
+    if (frames == 0 || left == NULL)
+        return true;
+
+    uint32_t step, inv;
+    if (!amb_rate_setup(rate, &step, &inv))
+        return true;
+
+    for (unsigned int i = 0; i < frames; i++)
+    {
+        int32_t l = amb_scale_aac(left[i]);
+        int32_t r = (channels > 1 && right) ? amb_scale_aac(right[i]) : l;
+
+        amb_resample_one(l, r, step, inv);
 
         if (amb_interrupted)
             return true;
@@ -432,7 +568,8 @@ static bool amb_decode_step(void)
 static bool amb_is_mp3(const char *name)
 {
     size_t len = strlen(name);
-    return len > 4 && !strcasecmp(name + len - 4, ".mp3");
+    return len > 4 && (!strcasecmp(name + len - 4, ".mp3") ||
+                       !strcasecmp(name + len - 4, ".aac"));
 }
 
 static int amb_name_cmp(const void *a, const void *b)
@@ -755,7 +892,7 @@ static void amb_thread(void)
             continue;
         }
 
-        if (!amb_decode_step())
+        if (!(amb_is_aac ? amb_decode_step_aac() : amb_decode_step()))
         {
             if (!amb_next_track())
                 amb_halt();
