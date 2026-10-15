@@ -558,32 +558,46 @@ static void bk_cover_cache_name(char *out, size_t size, const char *bookpath)
              bk_cover_side);
 }
 
-static bool bk_cover_cache_read(const char *bookpath, struct bitmap *bm)
+/* 1 = cover loaded from the cache, -1 = cached "this book has no cover",
+ * 0 = not cached yet */
+static int bk_cover_cache_read(const char *bookpath, struct bitmap *bm)
 {
     char name[MAX_PATH];
     struct bk_cvr_head hd;
-    bool ok = false;
+    int ok = 0;
 
     bk_cover_cache_name(name, sizeof(name), bookpath);
     int fd = open(name, O_RDONLY);
     if (fd < 0)
-        return false;
+        return 0;
     if (read(fd, &hd, sizeof(hd)) == (ssize_t)sizeof(hd) &&
-        !memcmp(hd.magic, "CVR1", 4) && hd.w > 0 && hd.h > 0 &&
-        hd.w <= bk_cover_side && hd.h <= bk_cover_side)
+        !memcmp(hd.magic, "CVR1", 4) && hd.w == 0 && hd.h == 0)
+    {
+        ok = -1;
+    }
+    else if (!memcmp(hd.magic, "CVR1", 4) && hd.w > 0 && hd.h > 0 &&
+             hd.w <= bk_cover_side && hd.h <= bk_cover_side)
     {
         size_t bytes = (size_t)hd.w * hd.h * sizeof(fb_data);
         if (read(fd, bm->data, bytes) == (ssize_t)bytes)
         {
             bm->width = hd.w;
             bm->height = hd.h;
-            ok = true;
+            ok = 1;
         }
     }
     close(fd);
     return ok;
 }
 
+static bool bk_cover_cache_exists(const char *bookpath)
+{
+    char name[MAX_PATH];
+    bk_cover_cache_name(name, sizeof(name), bookpath);
+    return file_exists(name);
+}
+
+/* bm == NULL writes the "no cover" marker */
 static void bk_cover_cache_write(const char *bookpath, const struct bitmap *bm)
 {
     char name[MAX_PATH];
@@ -595,10 +609,11 @@ static void bk_cover_cache_write(const char *bookpath, const struct bitmap *bm)
     if (fd < 0)
         return;
     memcpy(hd.magic, "CVR1", 4);
-    hd.w = bm->width;
-    hd.h = bm->height;
+    hd.w = bm ? bm->width : 0;
+    hd.h = bm ? bm->height : 0;
     write(fd, &hd, sizeof(hd));
-    write(fd, bm->data, (size_t)bm->width * bm->height * sizeof(fb_data));
+    if (bm)
+        write(fd, bm->data, (size_t)bm->width * bm->height * sizeof(fb_data));
     close(fd);
 }
 
@@ -621,9 +636,10 @@ static void bk_cover_load(const struct bk_book *book)
     const int format = FORMAT_NATIVE | FORMAT_DITHER |
                        FORMAT_RESIZE | FORMAT_KEEP_ASPECT;
 
-    if (bk_cover_cache_read(book->path, bm))
+    int cached = bk_cover_cache_read(book->path, bm);
+    if (cached != 0)
     {
-        bk_cover_ok = true;
+        bk_cover_ok = (cached > 0);
         return;
     }
 
@@ -666,9 +682,13 @@ static void bk_cover_load(const struct bk_book *book)
 #endif
     cpu_boost(false);
     bk_cover_ok = rc > 0;
-    if (bk_cover_ok)
-        bk_cover_cache_write(book->path, bm);
+    /* remember the result, also "no cover", so it is not searched again */
+    bk_cover_cache_write(book->path, bk_cover_ok ? bm : NULL);
 }
+
+/* Books whose cover / length data are known to be ready (cached) */
+static bool bk_pre_cover[BOOKS_MAX];
+static bool bk_pre_info[BOOKS_MAX];
 
 /* Stage 1 of showing a book: the cover, which is what the eye looks for. */
 static void bk_load_stage1(int book)
@@ -676,6 +696,7 @@ static void bk_load_stage1(int book)
     const struct bk_book *b = &bk_books[book];
     struct bk_detail *det = &bk_det;
 
+    bk_pre_cover[book] = true;
     det->book = book;
     det->info = false;
     det->started = false;
@@ -695,6 +716,7 @@ static void bk_load_stage2(int book)
 
     if (det->book != book)
         return;
+    bk_pre_info[book] = true;
     if (!bk_cache_lookup(b->path, det))
     {
         bk_measure(b, det);
@@ -710,6 +732,64 @@ static void bk_load_stage2(int book)
         det->pos_s = (det->total_s && pos > det->total_s) ? det->total_s : pos;
     }
     det->info = true;
+}
+
+/* ---- preparing the neighbours while idle ----------------------------------- */
+
+/* Does one piece of preparation work for a book near the shown one: its
+ * cover into the cover cache, or its file lengths into the length cache.
+ * Returns false when everything nearby is ready. It is called when nothing
+ * has been pressed for a moment, so the next book opens instantly. */
+static bool bk_precache_step(int sel)
+{
+    struct bk_detail keep_det = bk_det;
+    bool did = false;
+
+    for (int dist = 1; dist <= 6 && !did; dist++)
+    {
+        for (int side = 0; side < 2 && !did; side++)
+        {
+            int pos = sel + (side ? -dist : dist);
+            if (pos < 0 || pos >= bk_nview)
+                continue;
+            int book = bk_view[pos];
+            const struct bk_book *b = &bk_books[book];
+
+            if (!bk_pre_cover[book])
+            {
+                bk_pre_cover[book] = true;
+                if (!bk_cover_cache_exists(b->path))
+                {
+                    bk_list_files(b->path);
+                    bk_cover_load(b);   /* decodes and fills the cache */
+                    did = true;
+                }
+            }
+            else if (!bk_pre_info[book])
+            {
+                struct bk_detail tmp;
+                bk_pre_info[book] = true;
+                bk_list_files(b->path);
+                memset(&tmp, 0, sizeof(tmp));
+                if (!bk_cache_lookup(b->path, &tmp))
+                {
+                    bk_measure(b, &tmp);
+                    bk_cache_store(b->path, &tmp);
+                    did = true;
+                }
+            }
+        }
+    }
+
+    if (did && keep_det.book >= 0)
+    {
+        /* the shared cover buffer now holds a neighbour's cover: put the
+           shown one back (from the cache, so this is quick) */
+        bk_det = keep_det;
+        bk_list_files(bk_books[keep_det.book].path);
+        bk_cover_load(&bk_books[keep_det.book]);
+    }
+    return did;
 }
 
 /* ---- drawing -------------------------------------------------------------- */
@@ -914,6 +994,8 @@ static bool books_page(struct screen *display, struct viewport *vp,
     bk_recent_load();
     bk_sync_playing();
     bk_det.book = -1;
+    memset(bk_pre_cover, 0, sizeof(bk_pre_cover));
+    memset(bk_pre_info, 0, sizeof(bk_pre_info));
     bk_build_view(BK_TAB_RECENT);
     if (bk_nview == 0)
     {
@@ -1093,6 +1175,8 @@ static bool books_page(struct screen *display, struct viewport *vp,
                 /* nothing pressed for a moment: load the shown book */
                 if (need_load && bk_nview)
                     stage = 1;
+                else if (bk_nview)
+                    bk_precache_step(sel);
                 break;
             default:
                 if (default_event_handler(button) == SYS_USB_CONNECTED)
