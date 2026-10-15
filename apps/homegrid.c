@@ -958,6 +958,17 @@ int homegrid_show(void)
                     done = true;
                 }
                 break;
+            case BUTTON_PLAYPAUSE | BUTTON_REL:
+                /* Play opens the Now Playing screen */
+                if (audio_status() &
+                    (AUDIO_STATUS_PLAY | AUDIO_STATUS_PAUSE))
+                {
+                    result = GO_TO_WPS;
+                    done = true;
+                }
+                else
+                    splash(HZ, "Nothing playing");
+                break;
             case BUTTON_NONE:
                 break;
             default:

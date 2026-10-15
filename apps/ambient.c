@@ -1193,8 +1193,10 @@ static void amb_recent_load(void)
     int fd = open(AMB_RECENT_FILE, O_RDONLY);
     if (fd < 0)
         return;
+    /* read_line() returns 0 at the end of the file (and -1 on an error), so
+       stop on anything that is not a positive byte count */
     while (amb_recent_n < AMBIENT_RECENT_MAX &&
-           read_line(fd, amb_recent[amb_recent_n], MAX_PATH) >= 0)
+           read_line(fd, amb_recent[amb_recent_n], MAX_PATH) > 0)
     {
         if (amb_recent[amb_recent_n][0] == '/')
             amb_recent_n++;
