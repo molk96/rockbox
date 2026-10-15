@@ -1,7 +1,7 @@
 /***************************************************************************
- * Icon home: a desktop-style 3x2 grid of big icons, shown instead of the
+ * Icon home: a desktop-style 4x2 grid of big icons, shown instead of the
  * stock root menu on the Creative Zen X-Fi.  Colours follow the active
- * theme.  "Change mode" switches to the stock Rockbox menu, whose
+ * theme.  "Mode" switches to the stock Rockbox menu, whose
  * "Icon Home" entry switches back.
  *
  * This program is free software; you can redistribute it and/or

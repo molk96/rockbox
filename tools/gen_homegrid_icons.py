@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Generate apps/homegrid_icons.h: six 24x24 one-bit icons for the Zen X-Fi
-icon home page (apps/homegrid.c).  Each icon is 24 rows of a 32-bit word,
-bit 23 is the leftmost pixel.  The firmware draws every set pixel as a 2x2
+"""Generate apps/homegrid_icons.h: eight 20x20 one-bit icons for the Zen X-Fi
+icon home page (apps/homegrid.c).  Each icon is 20 rows of a 32-bit word,
+bit 19 is the leftmost pixel.  The firmware draws every set pixel as a 2x2
 square in the theme's colours, so the icons follow the active theme.
 
 Usage: tools/gen_homegrid_icons.py [--preview] > apps/homegrid_icons.h
@@ -9,7 +9,7 @@ Usage: tools/gen_homegrid_icons.py [--preview] > apps/homegrid_icons.h
 import math
 import sys
 
-N = 24
+N = 20
 
 
 def blank():
@@ -85,68 +85,108 @@ def circle(g, cx, cy, r):
 
 def icon_audiobooks():
     g = blank()
-    rect(g, 2, 4, 11, 19)
-    rect(g, 12, 4, 21, 19)
-    for y in (8, 11, 14):
-        line(g, 4, y, 9, y)
-        line(g, 14, y, 19, y)
+    rect(g, 1, 3, 9, 16)
+    rect(g, 10, 3, 18, 16)
+    for y in (6, 9, 12):
+        line(g, 3, y, 7, y)
+        line(g, 12, y, 16, y)
     return g
 
 
 def icon_music():
     g = blank()
-    circle(g, 6, 18, 3)
-    circle(g, 17, 16, 3)
-    line(g, 9, 18, 9, 4)
-    line(g, 20, 16, 20, 2)
-    line(g, 9, 4, 20, 2)
-    line(g, 9, 6, 20, 4)
+    circle(g, 5, 15, 2)
+    circle(g, 14, 13, 2)
+    line(g, 7, 15, 7, 3)
+    line(g, 16, 13, 16, 1)
+    line(g, 7, 3, 16, 1)
+    line(g, 7, 5, 16, 3)
     return g
 
 
 def icon_podcasts():
     g = blank()
-    rect(g, 9, 2, 14, 12)
-    line(g, 10, 1, 13, 1)
-    line(g, 10, 13, 13, 13)
-    poly(g, [(5, 9), (5, 12), (7, 16), (11, 18), (12, 18), (16, 16),
-             (18, 12), (18, 9)])
-    line(g, 11, 18, 11, 21)
-    line(g, 12, 18, 12, 21)
-    line(g, 8, 22, 15, 22)
+    rect(g, 7, 1, 12, 9)
+    line(g, 8, 0, 11, 0)
+    line(g, 8, 10, 11, 10)
+    poly(g, [(3, 7), (3, 10), (5, 13), (9, 15), (10, 15), (14, 13),
+             (16, 10), (16, 7)])
+    line(g, 9, 15, 9, 17)
+    line(g, 10, 15, 10, 17)
+    line(g, 6, 18, 13, 18)
     return g
 
 
 def icon_ambience():
     g = blank()
-    for base in (6, 12, 18):
-        for x in range(1, 23):
-            put(g, x, base + round(2.2 * math.sin((x - 1) * math.pi / 5.5)))
+    for base in (4, 10, 16):
+        for x in range(1, 19):
+            put(g, x, base + round(1.5 * math.sin((x - 1) * math.pi / 4.5)))
     return g
 
 
-def icon_mode():
+def icon_sleep():
     g = blank()
-    line(g, 2, 8, 20, 8)
-    poly(g, [(16, 4), (20, 8), (16, 12)])
-    line(g, 3, 16, 21, 16)
-    poly(g, [(7, 12), (3, 16), (7, 20)])
+    # solid crescent moon (inside a big circle but outside a smaller one)
+    # plus a small "z"
+    inside = [[0] * N for _ in range(N)]
+    for y in range(N):
+        for x in range(N):
+            d1 = math.hypot(x - 7.5, y - 11.5)
+            d2 = math.hypot(x - 12.0, y - 8.0)
+            if d1 <= 7.6 and d2 > 6.4:
+                inside[y][x] = 1
+    for y in range(N):
+        for x in range(N):
+            if inside[y][x]:
+                put(g, x, y)
+    line(g, 13, 1, 18, 1)
+    line(g, 18, 1, 13, 6)
+    line(g, 13, 6, 18, 6)
+    return g
+
+
+def icon_settings():
+    g = blank()
+    circle(g, 10, 10, 5)
+    circle(g, 10, 10, 2)
+    for k in range(8):
+        a = k * math.pi / 4
+        for r in (6.6, 7.6, 8.6):
+            x = round(10 + r * math.cos(a))
+            y = round(10 + r * math.sin(a))
+            put(g, x, y)
+            put(g, x + 1, y)
+            put(g, x, y + 1)
+            put(g, x + 1, y + 1)
     return g
 
 
 def icon_shortcuts():
     g = blank()
-    fill_poly(g, [(14, 0), (4, 13), (11, 13), (8, 24), (20, 9), (13, 9)])
+    fill_poly(g, [(12, 0), (3, 11), (9, 11), (7, 20), (17, 8), (11, 8)])
     return g
 
 
+def icon_mode():
+    g = blank()
+    line(g, 1, 6, 17, 6)
+    poly(g, [(13, 2), (17, 6), (13, 10)])
+    line(g, 2, 14, 18, 14)
+    poly(g, [(6, 10), (2, 14), (6, 18)])
+    return g
+
+
+# order = tile order in apps/homegrid.c
 ICONS = [
     ("audiobooks", icon_audiobooks),
     ("music", icon_music),
     ("podcasts", icon_podcasts),
     ("ambience", icon_ambience),
-    ("mode", icon_mode),
+    ("sleep", icon_sleep),
+    ("settings", icon_settings),
     ("shortcuts", icon_shortcuts),
+    ("mode", icon_mode),
 ]
 
 
@@ -171,10 +211,10 @@ def emit():
             for x, bit in enumerate(row):
                 if bit:
                     v |= 1 << (N - 1 - x)
-            rows.append("0x%06lx" % v)
+            rows.append("0x%05lx" % v)
         out.append("    /* %s */ {" % name)
-        for i in range(0, N, 6):
-            out.append("        " + ", ".join(rows[i:i + 6]) + ",")
+        for i in range(0, N, 5):
+            out.append("        " + ", ".join(rows[i:i + 5]) + ",")
         out.append("    },")
     out.append("};")
     print("\n".join(out))

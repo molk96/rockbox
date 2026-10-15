@@ -1,5 +1,6 @@
 /***************************************************************************
- * Icon home: a desktop-style 3x2 grid of big icons (Creative Zen X-Fi).
+ * Icon home: a desktop-style 4x2 grid of icons (Creative Zen X-Fi), under
+ * the title "Mp3 player".
  *
  * Navigation: Up/Down/Left/Right move the selection (wrapping), Select
  * opens the tile.  Back jumps to Now Playing when something is playing.
@@ -8,8 +9,9 @@
  *
  * Icons: the built-in icons are small one-bit pictures (homegrid_icons.h)
  * drawn in the theme colours.  A full-colour BMP named
- * /.rockbox/icons/home/<audiobooks|music|podcasts|ambience|mode|shortcuts>.bmp
- * (up to 56x56, magenta 255,0,255 is transparent) replaces a built-in icon.
+ * /.rockbox/icons/home/<audiobooks|music|podcasts|ambience|sleep|settings|
+ * shortcuts|mode>.bmp (up to 40x40, magenta 255,0,255 is transparent)
+ * replaces a built-in icon.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -47,15 +49,17 @@
 #include "timefuncs.h"
 #include "metadata.h"
 #include "list.h"
+#include "lang.h"
+#include "option_select.h"
 #include "homegrid_icons.h"
 
-#define COLS 3
+#define COLS 4
 #define ROWS 2
 #define NUM_TILES (COLS * ROWS)
 
 #define ICON_SCALE 2                /* built-in icons are drawn at 2x */
 #define BUILTIN_ICON_PX (HOMEGRID_ICON_SIZE * ICON_SCALE)
-#define CUSTOM_ICON_MAX 56          /* largest custom icon (pixels) */
+#define CUSTOM_ICON_MAX 40          /* largest custom icon (pixels) */
 #define ICON_BOX CUSTOM_ICON_MAX    /* icons are centred in this box */
 
 #define HOMEGRID_ICON_DIR ROCKBOX_DIR "/icons/home"
@@ -66,8 +70,10 @@ enum tile_id
     TILE_MUSIC,
     TILE_PODCASTS,
     TILE_AMBIENCE,
-    TILE_MODE,
+    TILE_SLEEP,
+    TILE_SETTINGS,
     TILE_SHORTCUTS,
+    TILE_MODE,
 };
 
 struct tile_info
@@ -81,8 +87,10 @@ static const struct tile_info tiles[NUM_TILES] = {
     [TILE_MUSIC]      = { "Music",       "music.bmp" },
     [TILE_PODCASTS]   = { "Podcasts",    "podcasts.bmp" },
     [TILE_AMBIENCE]   = { "Ambience",    "ambience.bmp" },
-    [TILE_MODE]       = { "Change mode", "mode.bmp" },
+    [TILE_SLEEP]      = { "Sleep timer", "sleep.bmp" },
+    [TILE_SETTINGS]   = { "Settings",    "settings.bmp" },
     [TILE_SHORTCUTS]  = { "Shortcuts",   "shortcuts.bmp" },
+    [TILE_MODE]       = { "Mode",        "mode.bmp" },
 };
 
 /* the icon home is the root screen from boot on */
@@ -209,6 +217,34 @@ static void draw_builtin_icon(struct screen *d, int idx, int x, int y)
     }
 }
 
+/* label of a tile; the sleep timer tile shows the time left while it runs */
+static void tile_label(int idx, char *buf, size_t size)
+{
+    if (idx == TILE_SLEEP && get_sleep_timer_active())
+    {
+        int min = (get_sleep_timer() + 59) / 60;
+        if (min >= 60)
+            snprintf(buf, size, "Sleep %d:%02d", min / 60, min % 60);
+        else
+            snprintf(buf, size, "Sleep %dm", min);
+    }
+    else
+        snprintf(buf, size, "%s", tiles[idx].label);
+}
+
+/* cut text from the end until it is at most maxw pixels wide */
+static void fit_text(struct screen *d, char *text, int maxw)
+{
+    int w;
+    size_t len = strlen(text);
+    d->getstringsize(text, &w, NULL);
+    while (len > 1 && w > maxw)
+    {
+        text[--len] = '\0';
+        d->getstringsize(text, &w, NULL);
+    }
+}
+
 static void draw_tile(struct screen *d, const struct palette *pal, int idx,
                       bool selected, int tx, int ty, int tw, int th, int fh)
 {
@@ -240,13 +276,13 @@ static void draw_tile(struct screen *d, const struct palette *pal, int idx,
                           by + (ICON_BOX - BUILTIN_ICON_PX) / 2);
     }
 
+    char label[24];
     int w;
+    tile_label(idx, label, sizeof(label));
+    fit_text(d, label, tw - 4);
     d->set_foreground(selected ? pal->accent : pal->fg);
-    d->getstringsize(tiles[idx].label, &w, NULL);
-    int lx = tx + (tw - w) / 2;
-    if (lx < tx + 2)
-        lx = tx + 2;
-    d->putsxy(lx, by + ICON_BOX + 2, tiles[idx].label);
+    d->getstringsize(label, &w, NULL);
+    d->putsxy(tx + (tw - w) / 2, by + ICON_BOX + 2, label);
 }
 
 static void format_clock(char *buf, size_t size)
@@ -276,8 +312,8 @@ static void draw_header(struct screen *d, const struct palette *pal,
     int w, h;
 
     d->set_foreground(pal->fg);
-    d->getstringsize("Home", &w, &h);
-    d->putsxy(6, (hh - h) / 2, "Home");
+    d->getstringsize("Mp3 player", &w, &h);
+    d->putsxy(6, (hh - h) / 2, "Mp3 player");
 
     format_clock(tmp, sizeof(tmp));
     int level = battery_level();
@@ -394,7 +430,22 @@ static int browse_folder(const char *dir)
     return GO_TO_FILEBROWSER;
 }
 
-static int open_tile(int idx)
+/* the sleep timer picker: Off / 15 / 30 / 60 min, the same setting as the
+   quick screen item */
+static void sleep_picker(void)
+{
+    const struct settings_list *setting =
+                                find_setting(&global_settings.sleep_preset);
+    if (!setting)
+        return;
+    if (!get_sleep_timer_active())
+        global_settings.sleep_preset = 0; /* nothing is running: show Off */
+    option_screen(setting, NULL, false, ID2P(LANG_SLEEP_TIMER));
+}
+
+/* Opens a tile. Returns the next screen for the root menu loop, or sets
+ * *stay when the page should stay up (the sleep timer picker). */
+static int open_tile(int idx, bool *stay)
 {
     switch (idx)
     {
@@ -409,11 +460,17 @@ static int open_tile(int idx)
             /* placeholder until the ambience page exists: browse the music
                folder, then use "Play as Ambient" in the context menu */
             return browse_folder("/Music");
+        case TILE_SLEEP:
+            sleep_picker();
+            *stay = true;
+            return GO_TO_ROOT;
+        case TILE_SETTINGS:
+            return GO_TO_MAINMENU;
+        case TILE_SHORTCUTS:
+            return GO_TO_SHORTCUTMENU;
         case TILE_MODE:
             homegrid_set_active(false);
             return GO_TO_ROOT;
-        case TILE_SHORTCUTS:
-            return GO_TO_SHORTCUTMENU;
     }
     return GO_TO_ROOT;
 }
@@ -488,9 +545,19 @@ int homegrid_show(void)
                 row = (row + 1) % ROWS;
                 break;
             case BUTTON_SELECT | BUTTON_REL:
-                result = open_tile(selected_tile);
-                done = true;
+            {
+                bool stay = false;
+                result = open_tile(selected_tile, &stay);
+                if (stay)
+                {
+                    /* back from the sleep timer picker */
+                    display->set_viewport(&vp);
+                    action_wait_for_release();
+                }
+                else
+                    done = true;
                 break;
+            }
             case BUTTON_BACK | BUTTON_REL:
                 /* jump to Now Playing when there is something playing */
                 if (audio_status() &
