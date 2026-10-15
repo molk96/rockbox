@@ -493,6 +493,7 @@ bool homegrid_ambient_pick(void)
 enum
 {
     AROW_VOLUME = 0,
+    AROW_TRACK,
     AROW_PAUSE,
     AROW_STOP,
     AROW_RECENT,
@@ -587,6 +588,28 @@ static void draw_volume_row(struct screen *d, const struct palette *pal,
     d->fillrect(kx, y + 3, 4, h - 6);
 }
 
+/* the previous / next track row */
+static void draw_track_row(struct screen *d, const struct palette *pal,
+                           bool selected, bool usable, int x, int y, int w,
+                           int h)
+{
+    char mid[24];
+    int tw, th, idx, total;
+
+    d->set_foreground(!usable ? pal->dim : selected ? pal->accent : pal->fg);
+    d->getstringsize("<", &tw, &th);
+    d->putsxy(x + 8, y + (h - th) / 2, "< Prev");
+    d->getstringsize("Next >", &tw, NULL);
+    d->putsxy(x + w - 8 - tw, y + (h - th) / 2, "Next >");
+
+    if (usable && ambient_get_index(&idx, &total))
+        snprintf(mid, sizeof(mid), "%d of %d", idx, total);
+    else
+        snprintf(mid, sizeof(mid), "Track");
+    d->getstringsize(mid, &tw, NULL);
+    d->putsxy(x + (w - tw) / 2, y + (h - th) / 2, mid);
+}
+
 /* Shows the ambience page. Returns true when the whole icon home should be
  * left (with *result as the next screen), false to return to the grid. */
 static bool ambience_page(struct screen *display, struct viewport *vp,
@@ -610,9 +633,16 @@ static bool ambience_page(struct screen *display, struct viewport *vp,
         int hh = fh + 6;
         int foot_h = fh + 9;
         int fy = height - foot_h;
-        int rows_h = AROW_COUNT * (fh + 10);
-        int ry = fy - rows_h - 4;
         int row_h = fh + 10;
+        /* the info block takes 4 lines under the header; make the rows
+           smaller when the font is big */
+        int info_bottom = hh + 4 + 4 * (fh + 2);
+        int avail = fy - 4 - info_bottom;
+        if (row_h * AROW_COUNT > avail)
+            row_h = avail / AROW_COUNT;
+        if (row_h < fh + 2)
+            row_h = fh + 2;
+        int ry = fy - AROW_COUNT * row_h - 2;
         char track[MAX_PATH], dir[MAX_PATH], line[64];
         int idx, total;
         bool active = ambient_is_active();
@@ -676,6 +706,12 @@ static bool ambience_page(struct screen *display, struct viewport *vp,
                                 row_h - 2);
                 continue;
             }
+            if (r == AROW_TRACK)
+            {
+                draw_track_row(display, &pal, is_sel, active, 4, y,
+                               width - 8, row_h - 2);
+                continue;
+            }
             switch (r)
             {
                 case AROW_PAUSE:
@@ -696,7 +732,7 @@ static bool ambience_page(struct screen *display, struct viewport *vp,
         /* footer */
         display->set_foreground(pal.dim);
         display->hline(0, width - 1, fy);
-        display->putsxy(6, fy + 3, "L/R volume   MID select   BACK home");
+        display->putsxy(6, fy + 3, "L/R change   MID select   BACK home");
         display->update();
 
         long button = button_get_w_tmo(HZ / 2);
@@ -711,10 +747,24 @@ static bool ambience_page(struct screen *display, struct viewport *vp,
                 sel = (sel + 1) % AROW_COUNT;
                 break;
             case BUTTON_LEFT:
-            case BUTTON_LEFT | BUTTON_REPEAT:
             case BUTTON_RIGHT:
+                if (sel == AROW_TRACK && ambient_is_active())
+                {
+                    if (button == BUTTON_RIGHT)
+                        ambient_next();
+                    else
+                        ambient_prev();
+                    sleep(HZ / 20);
+                    break;
+                }
+                if (sel != AROW_VOLUME)
+                    break;
+                /* fall through */
+            case BUTTON_LEFT | BUTTON_REPEAT:
             case BUTTON_RIGHT | BUTTON_REPEAT:
             {
+                if (sel != AROW_VOLUME)
+                    break; /* no auto-repeat track skipping */
                 int v = ambient_get_volume();
                 v += (button & BUTTON_RIGHT) ? 5 : -5;
                 if (v < 0)
@@ -728,6 +778,13 @@ static bool ambience_page(struct screen *display, struct viewport *vp,
             case BUTTON_SELECT | BUTTON_REL:
                 switch (sel)
                 {
+                    case AROW_TRACK:
+                        if (ambient_is_active())
+                        {
+                            ambient_next();
+                            sleep(HZ / 20);
+                        }
+                        break;
                     case AROW_PAUSE:
                         if (ambient_is_active())
                         {

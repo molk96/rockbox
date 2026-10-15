@@ -54,6 +54,7 @@ enum ambient_messages
     Q_AMBIENT_STOP,
     Q_AMBIENT_PAUSE,
     Q_AMBIENT_RESUME,
+    Q_AMBIENT_SKIP,   /* data: +1 next, -1 previous */
 };
 
 /* Static buffers: no buflib allocation at run time, so starting the ambient
@@ -104,6 +105,7 @@ static struct event_queue amb_queue SHAREDBSS_ATTR;
 static bool amb_active;          /* a track list is loaded and playing */
 static bool amb_main_seen;       /* normal playback has been seen running */
 static bool amb_paused;
+static long amb_track_tick;          /* when the current track was opened */
 static bool amb_user_paused;     /* paused from the ambience page */
 static int  amb_fd = -1;
 static bool amb_eof;
@@ -698,6 +700,7 @@ static bool amb_open_current(void)
     char path[MAX_PATH];
     const char *name = amb_names[amb_order[amb_pos]];
 
+    amb_track_tick = current_tick;
     if (amb_dir[0] == '/' && amb_dir[1] == '\0')
         snprintf(path, sizeof (path), "/%s", name);
     else
@@ -775,6 +778,37 @@ static bool amb_next_track(void)
         break; /* same track again */
     }
     return amb_open_current();
+}
+
+/* Jump to the next (dir > 0) or previous (dir < 0) file of the folder, in
+ * play order. Previous restarts the current file when it has been playing
+ * for more than 3 seconds. */
+static void amb_halt(void);
+
+static void amb_skip(int dir)
+{
+    if (!amb_active || amb_nfiles <= 0 || amb_after == AMB_AFTER_HALT)
+        return;
+
+    if (dir < 0 && TIME_AFTER(current_tick, amb_track_tick + 3 * HZ))
+        dir = 0; /* restart this one */
+
+    if (dir > 0)
+        amb_pos = (amb_pos + 1) % amb_nfiles;
+    else if (dir < 0)
+        amb_pos = (amb_pos + amb_nfiles - 1) % amb_nfiles;
+
+    amb_stop_playback(); /* drop what is already queued */
+    if (!amb_open_current())
+    {
+        amb_halt();
+        return;
+    }
+    if (!amb_paused && !amb_user_paused)
+    {
+        amb_gain = 0;
+        amb_fade_to(65536, AMB_FADE_PAUSE_STEP, AMB_AFTER_NONE);
+    }
 }
 
 /* ---- Sleep timer fade --------------------------------------------------- */
@@ -925,6 +959,11 @@ static void amb_thread(void)
                 amb_halt();
             continue;
         }
+        if (ev.id == Q_AMBIENT_SKIP)
+        {
+            amb_skip((int)ev.data);
+            continue;
+        }
         if (ev.id == Q_AMBIENT_PAUSE)
         {
             if (amb_active)
@@ -1071,6 +1110,18 @@ void ambient_set_volume(int percent)
     amb_volume = percent;
     if (amb_thread_id != 0)
         amb_apply_volume();
+}
+
+void ambient_next(void)
+{
+    if (amb_thread_id != 0)
+        queue_post(&amb_queue, Q_AMBIENT_SKIP, 1);
+}
+
+void ambient_prev(void)
+{
+    if (amb_thread_id != 0)
+        queue_post(&amb_queue, Q_AMBIENT_SKIP, -1);
 }
 
 void ambient_pause(void)

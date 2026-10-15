@@ -33,6 +33,10 @@ bool ambient_is_active(void);
 void ambient_set_volume(int percent);
 int ambient_get_volume(void);
 
+/* jump to the next / previous file of the folder */
+void ambient_next(void);
+void ambient_prev(void);
+
 /* user pause from the ambience page (fades like the stop) */
 void ambient_pause(void);
 void ambient_resume(void);
