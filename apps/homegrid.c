@@ -53,6 +53,14 @@
 #include "option_select.h"
 #include "homegrid_icons.h"
 #include "pathfuncs.h"
+#include "bookmark.h"
+#include "playlist.h"
+#include "filetypes.h"
+#include "strnatcmp.h"
+#include "recorder/bmp.h"
+#ifdef HAVE_JPEG
+#include "recorder/jpeg_load.h"
+#endif
 #include "string-extra.h"
 #include "gui/list.h"
 
@@ -453,8 +461,7 @@ static int open_tile(int idx, bool *stay)
     switch (idx)
     {
         case TILE_AUDIOBOOKS:
-            /* placeholder until the audiobook page exists */
-            return browse_folder("/Audiobooks");
+            return GO_TO_ROOT; /* handled by homegrid_show() */
         case TILE_MUSIC:
             return browse_folder("/Music");
         case TILE_PODCASTS:
@@ -847,6 +854,8 @@ static bool ambience_page(struct screen *display, struct viewport *vp,
     return leave;
 }
 
+#include "homegrid_books.h"
+
 /* ---- the screen -------------------------------------------------------- */
 
 int homegrid_show(void)
@@ -930,9 +939,15 @@ int homegrid_show(void)
             case BUTTON_SELECT | BUTTON_REL:
             {
                 bool stay = false;
-                if (selected_tile == TILE_AMBIENCE)
+                if (selected_tile == TILE_AMBIENCE ||
+                    selected_tile == TILE_AUDIOBOOKS)
                 {
-                    if (ambience_page(display, &vp, &result))
+                    bool leave_home;
+                    if (selected_tile == TILE_AMBIENCE)
+                        leave_home = ambience_page(display, &vp, &result);
+                    else
+                        leave_home = books_page(display, &vp, &result);
+                    if (leave_home)
                         done = true;
                     display->set_viewport(&vp);
                     action_wait_for_release();
