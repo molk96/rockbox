@@ -54,6 +54,8 @@
 #include "homegrid_icons.h"
 #include "pathfuncs.h"
 #include "bookmark.h"
+#include "chapters.h"
+#include "menu.h"
 #include "playlist.h"
 #include "filetypes.h"
 #include "strnatcmp.h"

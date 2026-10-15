@@ -71,6 +71,7 @@ struct bk_detail
     unsigned long total_s;
     unsigned long pos_s;
     bool started;           /* a bookmark exists */
+    bool info;              /* length, progress, title and author are loaded */
 };
 static struct bk_detail bk_det = { .book = -1 };
 
@@ -536,6 +537,71 @@ static bool bk_find_cover(const char *dir, char *out, size_t size)
     return best >= 0;
 }
 
+/* ---- cover cache ---------------------------------------------------------
+ * The decoded, scaled cover is kept in /.rockbox/bookcovers/ so that showing
+ * a book again does not have to decode the big JPEG. Delete that folder to
+ * make the covers load again from the pictures. */
+#define BK_COVER_DIR ROCKBOX_DIR "/bookcovers"
+
+struct bk_cvr_head
+{
+    char magic[4];
+    unsigned short w, h;
+};
+
+static void bk_cover_cache_name(char *out, size_t size, const char *bookpath)
+{
+    uint32_t h = 5381;
+    for (const char *p = bookpath; *p; p++)
+        h = h * 33 + (unsigned char)*p;
+    snprintf(out, size, BK_COVER_DIR "/%08lx_%d.cvr", (unsigned long)h,
+             bk_cover_side);
+}
+
+static bool bk_cover_cache_read(const char *bookpath, struct bitmap *bm)
+{
+    char name[MAX_PATH];
+    struct bk_cvr_head hd;
+    bool ok = false;
+
+    bk_cover_cache_name(name, sizeof(name), bookpath);
+    int fd = open(name, O_RDONLY);
+    if (fd < 0)
+        return false;
+    if (read(fd, &hd, sizeof(hd)) == (ssize_t)sizeof(hd) &&
+        !memcmp(hd.magic, "CVR1", 4) && hd.w > 0 && hd.h > 0 &&
+        hd.w <= bk_cover_side && hd.h <= bk_cover_side)
+    {
+        size_t bytes = (size_t)hd.w * hd.h * sizeof(fb_data);
+        if (read(fd, bm->data, bytes) == (ssize_t)bytes)
+        {
+            bm->width = hd.w;
+            bm->height = hd.h;
+            ok = true;
+        }
+    }
+    close(fd);
+    return ok;
+}
+
+static void bk_cover_cache_write(const char *bookpath, const struct bitmap *bm)
+{
+    char name[MAX_PATH];
+    struct bk_cvr_head hd;
+
+    mkdir(BK_COVER_DIR); /* fails harmlessly when it exists */
+    bk_cover_cache_name(name, sizeof(name), bookpath);
+    int fd = open(name, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (fd < 0)
+        return;
+    memcpy(hd.magic, "CVR1", 4);
+    hd.w = bm->width;
+    hd.h = bm->height;
+    write(fd, &hd, sizeof(hd));
+    write(fd, bm->data, (size_t)bm->width * bm->height * sizeof(fb_data));
+    close(fd);
+}
+
 static void bk_cover_load(const struct bk_book *book)
 {
     char path[MAX_PATH];
@@ -555,6 +621,13 @@ static void bk_cover_load(const struct bk_book *book)
     const int format = FORMAT_NATIVE | FORMAT_DITHER |
                        FORMAT_RESIZE | FORMAT_KEEP_ASPECT;
 
+    if (bk_cover_cache_read(book->path, bm))
+    {
+        bk_cover_ok = true;
+        return;
+    }
+
+    cpu_boost(true); /* decoding a big JPEG is slow at the idle clock */
     if (bk_find_cover(book->path, path, sizeof(path)))
     {
         int fd = open(path, O_RDONLY);
@@ -591,22 +664,37 @@ static void bk_cover_load(const struct bk_book *book)
         }
     }
 #endif
+    cpu_boost(false);
     bk_cover_ok = rc > 0;
+    if (bk_cover_ok)
+        bk_cover_cache_write(book->path, bm);
 }
 
-/* loads everything shown on the right for one book */
-static void bk_load_detail(int book)
+/* Stage 1 of showing a book: the cover, which is what the eye looks for. */
+static void bk_load_stage1(int book)
 {
     const struct bk_book *b = &bk_books[book];
     struct bk_detail *det = &bk_det;
 
     det->book = book;
+    det->info = false;
     det->started = false;
     det->total_s = 0;
     det->pos_s = 0;
     det->title[0] = det->author[0] = '\0';
 
     bk_list_files(b->path);
+    bk_cover_load(b);
+}
+
+/* Stage 2: title, author, length and progress (slow the first time). */
+static void bk_load_stage2(int book)
+{
+    const struct bk_book *b = &bk_books[book];
+    struct bk_detail *det = &bk_det;
+
+    if (det->book != book)
+        return;
     if (!bk_cache_lookup(b->path, det))
     {
         bk_measure(b, det);
@@ -621,7 +709,7 @@ static void bk_load_detail(int book)
         det->started = true;
         det->pos_s = (det->total_s && pos > det->total_s) ? det->total_s : pos;
     }
-    bk_cover_load(b);
+    det->info = true;
 }
 
 /* ---- drawing -------------------------------------------------------------- */
@@ -668,14 +756,15 @@ static void bk_draw_tabs(struct screen *d, const struct palette *pal,
 }
 
 static void bk_draw_pane(struct screen *d, const struct palette *pal,
-                         int sel_book, bool loading, int px, int pw,
+                         int sel_book, bool reading, int px, int pw,
                          int top, int side, int fh)
 {
     int x = px + (pw - side) / 2;
     int y = top + 4;
     char line[48];
     const struct bk_book *b = &bk_books[sel_book];
-    bool have = (bk_det.book == sel_book) && !loading;
+    bool have = (bk_det.book == sel_book);
+    bool info = have && bk_det.info;
 
     /* cover or placeholder */
     if (have && bk_cover_ok)
@@ -693,15 +782,10 @@ static void bk_draw_pane(struct screen *d, const struct palette *pal,
         draw_builtin_icon(d, TILE_AUDIOBOOKS,
                           x + (side - BUILTIN_ICON_PX) / 2,
                           y + (side - BUILTIN_ICON_PX) / 2);
-        if (loading)
-        {
-            d->set_foreground(pal->fg);
-            bk_text_centered(d, x, side, y + side - fh - 3, "Reading...");
-        }
     }
     y += side + 4;
 
-    if (have && bk_det.total_s > 0)
+    if (info && bk_det.total_s > 0)
     {
         int pct = (int)(bk_det.pos_s * 100 / bk_det.total_s);
         int fill = (int)((side - 2) * (unsigned long long)bk_det.pos_s /
@@ -734,11 +818,16 @@ static void bk_draw_pane(struct screen *d, const struct palette *pal,
     else
     {
         y += 8;
+        if (reading)
+        {
+            d->set_foreground(pal->dim);
+            bk_text_centered(d, px, pw, y, "Reading...");
+        }
         y += 2 * (fh + 2);
     }
 
     /* title and author */
-    snprintf(line, sizeof(line), "%s", have && bk_det.title[0] ? bk_det.title
+    snprintf(line, sizeof(line), "%s", info && bk_det.title[0] ? bk_det.title
                                                               : b->name);
     fit_text(d, line, pw - 4);
     d->set_foreground(pal->fg);
@@ -746,7 +835,7 @@ static void bk_draw_pane(struct screen *d, const struct palette *pal,
     y += fh + 2;
 
     snprintf(line, sizeof(line), "%s",
-             have ? bk_det.author : b->parent);
+             info ? bk_det.author : b->parent);
     if (line[0])
     {
         fit_text(d, line, pw - 4);
@@ -761,6 +850,27 @@ static void bk_draw_pane(struct screen *d, const struct palette *pal,
 static bool bk_open(int book)
 {
     const char *dir = bk_books[book].path;
+    char bmark[MAX_PATH];
+
+    snprintf(bmark, sizeof(bmark), "%s.bmark", dir);
+    if (!file_exists(bmark))
+    {
+        /* never started: offer the chapter list before starting */
+        MENUITEM_STRINGLIST(start_menu, "Start listening", NULL,
+                            "Start from the beginning", "Choose chapter...");
+        int choice = do_menu(&start_menu, NULL, NULL, false);
+        if (choice == 1)
+        {
+            bookmark_autoload(dir);     /* saves what is playing now */
+            bool ok = chapters_choose(dir);
+            if (ok)
+                bk_recent_add(dir);
+            return ok;
+        }
+        if (choice != 0)
+            return false;
+    }
+
     int res = bookmark_autoload(dir);   /* the resume menu, if there is one */
 
     if (res == BOOKMARK_CANCEL)
@@ -796,7 +906,7 @@ static bool books_page(struct screen *display, struct viewport *vp,
     int sel = 0, top = 0;
     bool leave = false, done = false;
     bool need_load = false;      /* the shown book has no details yet */
-    bool loading = false;
+    int stage = 0;               /* pending load: 1 = cover, 2 = the rest */
 
     action_wait_for_release();
     splash(0, ID2P(LANG_WAIT));
@@ -810,6 +920,9 @@ static bool books_page(struct screen *display, struct viewport *vp,
         tab = BK_TAB_ALL;
         bk_build_view(tab);
     }
+
+    if (bk_nview)
+        stage = 1;      /* show the first book's cover right away */
 
     {
         int fh = display->getcharheight();
@@ -899,7 +1012,7 @@ static bool books_page(struct screen *display, struct viewport *vp,
                 display->set_foreground(pal.dim);
                 display->putsxy(list_w - 10, fy - fh - 2, "v");
             }
-            bk_draw_pane(display, &pal, bk_view[sel], loading,
+            bk_draw_pane(display, &pal, bk_view[sel], stage == 2,
                          list_w + 4, width - list_w - 8, ly, bk_cover_side,
                          fh);
             need_load = (bk_det.book != bk_view[sel]);
@@ -910,15 +1023,20 @@ static bool books_page(struct screen *display, struct viewport *vp,
         display->putsxy(6, fy + 3, "L/R tab   MID open   BACK home");
         display->update();
 
-        if (loading)
+        if (stage == 1)
         {
-            /* the "Reading..." screen is up: do the slow part now */
-            bk_load_detail(bk_view[sel]);
-            loading = false;
+            bk_load_stage1(bk_view[sel]);
+            stage = 2;      /* draw the cover, then do the slow part */
+            continue;
+        }
+        if (stage == 2)
+        {
+            bk_load_stage2(bk_view[sel]);
+            stage = 0;
             continue;
         }
 
-        long button = button_get_w_tmo(HZ / 3);
+        long button = button_get_w_tmo(HZ / 6);
         switch (button)
         {
             case BUTTON_UP:
@@ -974,7 +1092,7 @@ static bool books_page(struct screen *display, struct viewport *vp,
             case BUTTON_NONE:
                 /* nothing pressed for a moment: load the shown book */
                 if (need_load && bk_nview)
-                    loading = true;
+                    stage = 1;
                 break;
             default:
                 if (default_event_handler(button) == SYS_USB_CONNECTED)

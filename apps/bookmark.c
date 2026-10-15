@@ -44,6 +44,7 @@
 #include "pathfuncs.h"
 #include "playlist_menu.h"
 #include "iap-usb.h"
+#include "chapters.h"
 
 /*#define LOGF_ENABLE*/
 #include "logf.h"
@@ -1184,6 +1185,9 @@ static bool read_latest_bookmark(const char *bm_filename, char *buf, size_t bufs
 enum resume_choice
 {
     RESUME_CHOICE_RESUME = 0,
+#ifdef HAVE_CHAPTERS
+    RESUME_CHOICE_CHAPTER,
+#endif
     RESUME_CHOICE_REWIND_10M,
     RESUME_CHOICE_REWIND_30M,
     RESUME_CHOICE_REWIND_1H,
@@ -1192,7 +1196,7 @@ enum resume_choice
 
 /* Shows "Resume / Rewind / Start over" for an audiobook or podcast.
  * Returns BOOKMARK_DO_RESUME, BOOKMARK_DONT_RESUME or BOOKMARK_CANCEL. */
-static int resume_with_rewind_menu(const char *bm_filename)
+static int resume_with_rewind_menu(const char *bm_filename, const char *dir)
 {
     static char bookmark[TEMP_BUF_SIZE];
     static char resume_label[MAX_PATH + 32];
@@ -1219,6 +1223,9 @@ static int resume_with_rewind_menu(const char *bm_filename)
 
     MENUITEM_STRINGLIST(menu_items, "Continue listening", NULL,
                         resume_label,
+#ifdef HAVE_CHAPTERS
+                        "Choose chapter...",
+#endif
                         "Rewind 10 minutes",
                         "Rewind 30 minutes",
                         "Rewind 1 hour",
@@ -1231,6 +1238,11 @@ static int resume_with_rewind_menu(const char *bm_filename)
     {
         case RESUME_CHOICE_RESUME:
             break;
+#ifdef HAVE_CHAPTERS
+        case RESUME_CHOICE_CHAPTER:
+            /* the chapter list starts playback itself */
+            return chapters_choose(dir) ? BOOKMARK_DO_RESUME : BOOKMARK_CANCEL;
+#endif
         case RESUME_CHOICE_REWIND_10M:
             rewind_ms = 10UL * 60 * 1000;
             break;
@@ -1406,7 +1418,7 @@ int bookmark_autoload(const char* file)
         return BOOKMARK_DONT_RESUME;
 
     /* always ask, whatever the global autoload setting says */
-    return resume_with_rewind_menu(bm_filename);
+    return resume_with_rewind_menu(bm_filename, file);
 }
 
 /* ----------------------------------------------------------------------- */

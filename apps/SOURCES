@@ -34,6 +34,8 @@ ambient.c
 ambient_mp4.c
 #ifdef CREATIVE_ZENXFI
 homegrid.c
+chapters.c
+mp4chapters.c
 #endif
 rbcodec_helpers.c
 menus/main_menu.c
