@@ -44,6 +44,7 @@
 #include "skin_engine/skin_engine.h"
 #include "splash.h"
 #include "icons.h"
+#include "homegrid.h"
 #ifdef HAVE_LCD_COLOR
 #include "filetypes.h"
 #endif
@@ -385,9 +386,17 @@ MENUITEM_SETTING(cursor_style, &global_settings.cursor_style, NULL);
 MENUITEM_SETTING(sep_menu, &global_settings.list_separator_height, NULL);
 #endif
 
+#ifdef HAVE_ICON_HOME
+MENUITEM_FUNCTION(home_icon_pack, 0, (unsigned char *)"Home icon pack",
+                  homegrid_pack_menu, NULL, Icon_NOICON);
+#endif
+
 MAKE_MENU(theme_menu, ID2P(LANG_THEME_MENU),
             NULL, Icon_Wps,
             &browse_themes,
+#ifdef HAVE_ICON_HOME
+            &home_icon_pack,
+#endif
             &browse_fonts,
             &browse_wps,
 #ifdef HAVE_REMOTE_LCD

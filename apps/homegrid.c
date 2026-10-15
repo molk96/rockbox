@@ -8,10 +8,13 @@
  * list selector colours), so every theme recolours this page.
  *
  * Icons: the built-in icons are small one-bit pictures (homegrid_icons.h)
- * drawn in the theme colours.  A full-colour BMP named
+ * drawn in the theme colours.  Settings > Theme Settings > Home icon pack
+ * picks one of the 48x48 icon packs (homegrid_packs.h, made by
+ * tools/gen_homegrid_packs.py); two of them follow the theme colours, so
+ * they turn light or dark with the theme.  A full-colour BMP named
  * /.rockbox/icons/home/<audiobooks|music|podcasts|ambience|sleep|settings|
- * shortcuts|mode>.bmp (up to 40x40, magenta 255,0,255 is transparent)
- * replaces a built-in icon.
+ * shortcuts|mode>.bmp (up to 48x48, magenta 255,0,255 is transparent)
+ * replaces any icon.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -52,6 +55,7 @@
 #include "lang.h"
 #include "option_select.h"
 #include "homegrid_icons.h"
+#include "homegrid_packs.h"
 #include "pathfuncs.h"
 #include "bookmark.h"
 #include "chapters.h"
@@ -72,7 +76,7 @@
 
 #define ICON_SCALE 2                /* built-in icons are drawn at 2x */
 #define BUILTIN_ICON_PX (HOMEGRID_ICON_SIZE * ICON_SCALE)
-#define CUSTOM_ICON_MAX 40          /* largest custom icon (pixels) */
+#define CUSTOM_ICON_MAX 48          /* largest custom icon (pixels) */
 #define ICON_BOX CUSTOM_ICON_MAX    /* icons are centred in this box */
 
 #define HOMEGRID_ICON_DIR ROCKBOX_DIR "/icons/home"
@@ -170,6 +174,85 @@ static void icons_free(void)
     }
 }
 
+/* ---- icon packs -------------------------------------------------------- */
+
+#define HOMEGRID_PACK_FILE ROCKBOX_DIR "/home_icon_pack.cfg"
+
+/* 0 = built-in icons, 1..HOMEGRID_NUM_PACKS = homegrid_packs[n - 1] */
+static int pack_sel = 0;
+static bool pack_loaded = false;
+
+static void pack_load(void)
+{
+    if (pack_loaded)
+        return;
+    pack_loaded = true;
+    int fd = open(HOMEGRID_PACK_FILE, O_RDONLY);
+    if (fd < 0)
+        return;
+    char c = 0;
+    if (read(fd, &c, 1) == 1 && c >= '0' && c <= '9' &&
+        c - '0' <= HOMEGRID_NUM_PACKS)
+        pack_sel = c - '0';
+    close(fd);
+}
+
+static void pack_save(void)
+{
+    int fd = open(HOMEGRID_PACK_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (fd < 0)
+        return;
+    char c = '0' + pack_sel;
+    write(fd, &c, 1);
+    close(fd);
+}
+
+static const struct icon_pack *current_pack(void)
+{
+    return (pack_sel > 0 && pack_sel <= HOMEGRID_NUM_PACKS)
+           ? &homegrid_packs[pack_sel - 1] : NULL;
+}
+
+static bool pack_picked;
+
+static int pack_action(int action, struct gui_synclist *lists)
+{
+    (void)lists;
+    if (action == ACTION_STD_OK)
+    {
+        pack_picked = true;
+        return ACTION_STD_CANCEL;   /* ends the list, selection stays set */
+    }
+    return action;
+}
+
+static const char *pack_get_name(int item, void *data, char *buf, size_t len)
+{
+    (void)data;
+    const char *name = item == 0 ? "Built-in" : homegrid_packs[item - 1].name;
+    snprintf(buf, len, "%s%s", item == pack_sel ? "> " : "", name);
+    return buf;
+}
+
+/* Settings > Theme Settings > Home icon pack */
+int homegrid_pack_menu(void)
+{
+    struct simplelist_info info;
+
+    pack_load();
+    pack_picked = false;
+    simplelist_info_init(&info, "Home icon pack", HOMEGRID_NUM_PACKS + 1, NULL);
+    info.get_name = pack_get_name;
+    info.action_callback = pack_action;
+    info.selection = pack_sel;
+    if (simplelist_show_list(&info) || !pack_picked ||
+        info.selection < 0 || info.selection > HOMEGRID_NUM_PACKS)
+        return 0;
+    pack_sel = info.selection;
+    pack_save();
+    return 0;
+}
+
 /* ---- colours ----------------------------------------------------------- */
 
 struct palette
@@ -179,7 +262,14 @@ struct palette
     unsigned dim;     /* secondary text, separators */
     unsigned accent;  /* selection frame and progress bars */
     unsigned sel_bg;  /* fill behind the selected tile */
+    bool hdr_on;      /* header band with its own colours (icon packs) */
+    unsigned hdr1, hdr2, hdr_fg;
 };
+
+static unsigned hex_color(unsigned long c)
+{
+    return LCD_RGBPACK((c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff);
+}
 
 /* pct percent of b, the rest of a */
 static unsigned blend(unsigned a, unsigned b, int pct)
@@ -203,6 +293,22 @@ static void palette_init(struct palette *p)
         p->accent = p->fg;
     p->dim = blend(p->bg, p->fg, 55);
     p->sel_bg = blend(p->bg, p->accent, 22);
+    p->hdr_on = false;
+
+    /* an icon pack with its own look sets the page colours */
+    const struct icon_pack *pk = current_pack();
+    if (pk && pk->own_colors)
+    {
+        p->bg = hex_color(pk->bg);
+        p->fg = hex_color(pk->fg);
+        p->dim = hex_color(pk->dim);
+        p->accent = hex_color(pk->accent);
+        p->sel_bg = hex_color(pk->sel_bg);
+        p->hdr_on = true;
+        p->hdr1 = hex_color(pk->hdr1);
+        p->hdr2 = hex_color(pk->hdr2);
+        p->hdr_fg = hex_color(pk->hdr_fg);
+    }
 }
 
 /* ---- drawing ----------------------------------------------------------- */
@@ -226,6 +332,51 @@ static void draw_builtin_icon(struct screen *d, int idx, int x, int y)
                 col++;
             d->fillrect(x + start * ICON_SCALE, y + row * ICON_SCALE,
                         (col - start) * ICON_SCALE, ICON_SCALE);
+        }
+    }
+}
+
+/* a picture of an icon pack; selected tiles use the selection colours */
+static void draw_pack_icon(struct screen *d, const struct palette *pal,
+                           const struct icon_pack *pk, int idx, bool selected,
+                           int x, int y)
+{
+    unsigned fgc = selected ? pal->accent : pal->fg;
+    unsigned bgc = selected ? pal->sel_bg : pal->bg;
+    unsigned lut[64];
+    int n = pk->npal > 63 ? 63 : pk->npal;
+
+    for (int i = 0; i < n; i++)
+    {
+        unsigned long e = pk->pal[i];
+        switch (e >> 24)
+        {
+            case 1:  lut[i + 1] = fgc; break;
+            case 2:  lut[i + 1] = bgc; break;
+            case 3:  lut[i + 1] = blend(bgc, fgc, 33); break;
+            case 4:  lut[i + 1] = blend(bgc, fgc, 67); break;
+            default: lut[i + 1] = hex_color(e & 0xffffff); break;
+        }
+    }
+
+    const unsigned char *pix = pk->pix + (size_t)idx * pk->size * pk->size;
+    int sc = pk->scale;
+    for (int row = 0; row < pk->size; row++)
+    {
+        int col = 0;
+        while (col < pk->size)
+        {
+            unsigned char c = pix[row * pk->size + col];
+            if (c == 0 || c > n)
+            {
+                col++;
+                continue;
+            }
+            int start = col;
+            while (col < pk->size && pix[row * pk->size + col] == c)
+                col++;
+            d->set_foreground(lut[c]);
+            d->fillrect(x + start * sc, y + row * sc, (col - start) * sc, sc);
         }
     }
 }
@@ -283,6 +434,14 @@ static void draw_tile(struct screen *d, const struct palette *pal, int idx,
         d->transparent_bitmap(custom[idx].bm.data, cx, cy,
                               custom[idx].bm.width, custom[idx].bm.height);
     }
+    else if (current_pack())
+    {
+        const struct icon_pack *pk = current_pack();
+        int px = pk->size * pk->scale;
+        draw_pack_icon(d, pal, pk, idx, selected,
+                       ix + (ICON_BOX - px) / 2, by + (ICON_BOX - px) / 2);
+        d->set_foreground(selected ? pal->accent : pal->fg);
+    }
     else
     {
         draw_builtin_icon(d, idx, ix + (ICON_BOX - BUILTIN_ICON_PX) / 2,
@@ -324,7 +483,17 @@ static void draw_header(struct screen *d, const struct palette *pal,
     char buf[16], tmp[16];
     int w, h;
 
-    d->set_foreground(pal->fg);
+    if (pal->hdr_on)
+    {
+        for (int x = 0; x < width; x++)
+        {
+            d->set_foreground(blend(pal->hdr1, pal->hdr2,
+                                    width > 1 ? x * 100 / (width - 1) : 0));
+            d->vline(x, 0, hh - 2);
+        }
+    }
+
+    d->set_foreground(pal->hdr_on ? pal->hdr_fg : pal->fg);
     d->getstringsize(title, &w, &h);
     d->putsxy(6, (hh - h) / 2, title);
 
@@ -335,7 +504,7 @@ static void draw_header(struct screen *d, const struct palette *pal,
     else
         buf[0] = '\0';
 
-    d->set_foreground(pal->dim);
+    d->set_foreground(pal->hdr_on ? pal->hdr_fg : pal->dim);
     int x = width - 6;
     if (tmp[0])
     {
@@ -873,6 +1042,7 @@ int homegrid_show(void)
     viewportmanager_theme_enable(SCREEN_MAIN, false, &vp);
     last_vp = display->set_viewport(&vp);
     display->scroll_stop();
+    pack_load();
     icons_load();
     action_wait_for_release();
 

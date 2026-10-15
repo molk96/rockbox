@@ -36,6 +36,9 @@ int homegrid_show(void);
 /* true while the file browser was opened from the ambience page: picking a
  * file there starts it as ambient */
 bool homegrid_ambient_pick(void);
+
+/* Settings > Theme Settings > Home icon pack: pick the icon pack */
+int homegrid_pack_menu(void);
 #endif
 
 #endif /* _HOMEGRID_H */

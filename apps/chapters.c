@@ -175,11 +175,19 @@ static const char *ch_get_name(int selected_item, void *data, char *buffer,
     return buffer;
 }
 
+static bool ch_picked;
+
 static int ch_action(int action, struct gui_synclist *lists)
 {
     (void)lists;
-    /* returning CANCEL for OK ends the list with the selection set */
-    return action == ACTION_STD_OK ? ACTION_STD_CANCEL : action;
+    /* returning CANCEL for OK ends the list with the selection set; Back
+       also ends it, so remember which one it was */
+    if (action == ACTION_STD_OK)
+    {
+        ch_picked = true;
+        return ACTION_STD_CANCEL;
+    }
+    return action;
 }
 
 bool chapters_choose(const char *dir)
@@ -232,7 +240,8 @@ bool chapters_choose(const char *dir)
     info.get_name = ch_get_name;
     info.action_callback = ch_action;
     info.selection = ch_cur >= 0 ? ch_cur : 0;
-    if (simplelist_show_list(&info) || info.selection < 0 ||
+    ch_picked = false;
+    if (simplelist_show_list(&info) || !ch_picked || info.selection < 0 ||
         info.selection >= ch_nitems)
         return false;
 
