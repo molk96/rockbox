@@ -27,6 +27,8 @@
 #include <font.h>
 #include <limits.h>
 #include "bookmark.h"
+#include "homegrid.h"
+#include "ambient.h"
 #include "tree.h"
 #include "core_alloc.h"
 #include "settings.h"
@@ -602,6 +604,14 @@ int ft_enter(struct tree_context* c)
 
             case FILE_ATTR_AUDIO:
             {
+#ifdef HAVE_ICON_HOME
+                if (homegrid_ambient_pick())
+                {
+                    /* opened from the ambience page: play as ambient */
+                    ambient_start(buf);
+                    return GO_TO_ROOT;
+                }
+#endif
                 int res = bookmark_autoload(c->currdir);
                 if (res == BOOKMARK_CANCEL || res == BOOKMARK_DO_RESUME)
                     break;

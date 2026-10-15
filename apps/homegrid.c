@@ -52,6 +52,9 @@
 #include "lang.h"
 #include "option_select.h"
 #include "homegrid_icons.h"
+#include "pathfuncs.h"
+#include "string-extra.h"
+#include "gui/list.h"
 
 #define COLS 4
 #define ROWS 2
@@ -83,11 +86,11 @@ struct tile_info
 };
 
 static const struct tile_info tiles[NUM_TILES] = {
-    [TILE_AUDIOBOOKS] = { "Audiobooks",  "audiobooks.bmp" },
+    [TILE_AUDIOBOOKS] = { "Books",       "audiobooks.bmp" },
     [TILE_MUSIC]      = { "Music",       "music.bmp" },
     [TILE_PODCASTS]   = { "Podcasts",    "podcasts.bmp" },
     [TILE_AMBIENCE]   = { "Ambience",    "ambience.bmp" },
-    [TILE_SLEEP]      = { "Sleep timer", "sleep.bmp" },
+    [TILE_SLEEP]      = { "Sleep",       "sleep.bmp" },
     [TILE_SETTINGS]   = { "Settings",    "settings.bmp" },
     [TILE_SHORTCUTS]  = { "Shortcuts",   "shortcuts.bmp" },
     [TILE_MODE]       = { "Mode",        "mode.bmp" },
@@ -306,14 +309,14 @@ static void format_elapsed(char *buf, size_t size, unsigned long ms)
 }
 
 static void draw_header(struct screen *d, const struct palette *pal,
-                        int width, int hh)
+                        const char *title, int width, int hh)
 {
     char buf[16], tmp[16];
     int w, h;
 
     d->set_foreground(pal->fg);
-    d->getstringsize("Mp3 player", &w, &h);
-    d->putsxy(6, (hh - h) / 2, "Mp3 player");
+    d->getstringsize(title, &w, &h);
+    d->putsxy(6, (hh - h) / 2, title);
 
     format_clock(tmp, sizeof(tmp));
     int level = battery_level();
@@ -457,9 +460,7 @@ static int open_tile(int idx, bool *stay)
         case TILE_PODCASTS:
             return browse_folder("/Podcasts");
         case TILE_AMBIENCE:
-            /* placeholder until the ambience page exists: browse the music
-               folder, then use "Play as Ambient" in the context menu */
-            return browse_folder("/Music");
+            return GO_TO_ROOT; /* handled by homegrid_show() */
         case TILE_SLEEP:
             sleep_picker();
             *stay = true;
@@ -473,6 +474,320 @@ static int open_tile(int idx, bool *stay)
             return GO_TO_ROOT;
     }
     return GO_TO_ROOT;
+}
+
+
+/* ---- Ambience page ------------------------------------------------------ */
+
+/* set while the file browser was opened from the ambience page: a file
+   picked there is started as ambient instead of normal playback */
+static bool ambient_pick_mode;
+/* the page that opened the browser is shown again when the browser closes */
+static bool ambience_reopen;
+
+bool homegrid_ambient_pick(void)
+{
+    return ambient_pick_mode;
+}
+
+enum
+{
+    AROW_VOLUME = 0,
+    AROW_PAUSE,
+    AROW_STOP,
+    AROW_RECENT,
+    AROW_BROWSE,
+    AROW_COUNT
+};
+
+static const char *base_name(const char *path)
+{
+    const char *slash = strrchr(path, '/');
+    return (slash && slash[1]) ? slash + 1 : path;
+}
+
+static const char *ambient_mode_name(void)
+{
+    switch (global_settings.ambient_mode)
+    {
+        case AMBIENT_MODE_LOOP:   return "Loop one";
+        case AMBIENT_MODE_FOLDER: return "Folder";
+        default:                  return "Shuffle";
+    }
+}
+
+static const char *recent_get_name(int selected_item, void *data,
+                                   char *buffer, size_t buffer_len)
+{
+    char path[MAX_PATH];
+    (void)data;
+    if (!ambient_recent_get(selected_item, path, sizeof(path)))
+        return "";
+    strlcpy(buffer, base_name(path), buffer_len);
+    return buffer;
+}
+
+static int recent_action(int action, struct gui_synclist *lists)
+{
+    (void)lists;
+    /* returning CANCEL for OK makes simplelist exit with the selection set */
+    return action == ACTION_STD_OK ? ACTION_STD_CANCEL : action;
+}
+
+/* lets the user pick one of the recent ambient files/folders */
+static void recent_picker(void)
+{
+    struct simplelist_info info;
+    int n = ambient_recent_count();
+
+    if (n <= 0)
+    {
+        splash(HZ, "No recent ambience yet");
+        return;
+    }
+    simplelist_info_init(&info, "Recent ambience", n, NULL);
+    info.get_name = recent_get_name;
+    info.action_callback = recent_action;
+    if (simplelist_show_list(&info) || info.selection < 0)
+        return;
+    char path[MAX_PATH];
+    if (ambient_recent_get(info.selection, path, sizeof(path)))
+        ambient_start(path);
+}
+
+/* the volume slider row */
+static void draw_volume_row(struct screen *d, const struct palette *pal,
+                            bool selected, int x, int y, int w, int h)
+{
+    char pct[8];
+    int tw, th;
+    int vol = ambient_get_volume();
+
+    d->set_foreground(selected ? pal->accent : pal->fg);
+    d->getstringsize("Volume", &tw, &th);
+    d->putsxy(x + 6, y + (h - th) / 2, "Volume");
+
+    snprintf(pct, sizeof(pct), "%d%%", vol);
+    d->getstringsize(pct, &tw, &th);
+    d->putsxy(x + w - 6 - tw, y + (h - th) / 2, pct);
+
+    int d1, d2;
+    d->getstringsize("Volume", &d1, NULL);
+    d->getstringsize("100%", &d2, NULL);
+    int sx = x + 6 + d1 + 8;
+    int sw = (x + w - 6 - d2 - 8) - sx;
+    int sy = y + h / 2 - 2;
+    if (sw < 10)
+        return;
+    d->set_foreground(pal->dim);
+    d->drawrect(sx, sy, sw, 5);
+    d->set_foreground(selected ? pal->accent : pal->fg);
+    d->fillrect(sx + 1, sy + 1, (sw - 2) * vol / 100, 3);
+    int kx = sx + (sw - 4) * vol / 100;
+    d->fillrect(kx, y + 3, 4, h - 6);
+}
+
+/* Shows the ambience page. Returns true when the whole icon home should be
+ * left (with *result as the next screen), false to return to the grid. */
+static bool ambience_page(struct screen *display, struct viewport *vp,
+                          int *result)
+{
+    struct palette pal;
+    int sel = AROW_PAUSE;
+    bool leave = false, done = false;
+
+    action_wait_for_release();
+
+    while (!done)
+    {
+        palette_init(&pal);
+        vp->fg_pattern = pal.fg;
+        vp->bg_pattern = pal.bg;
+        display->clear_viewport();
+
+        int width = vp->width, height = vp->height;
+        int fh = display->getcharheight();
+        int hh = fh + 6;
+        int foot_h = fh + 9;
+        int fy = height - foot_h;
+        int rows_h = AROW_COUNT * (fh + 10);
+        int ry = fy - rows_h - 4;
+        int row_h = fh + 10;
+        char track[MAX_PATH], dir[MAX_PATH], line[64];
+        int idx, total;
+        bool active = ambient_is_active();
+
+        draw_header(display, &pal, "Ambience", width, hh);
+
+        /* what is playing */
+        int iy = hh + 4;
+        display->set_foreground(pal.dim);
+        display->putsxy(6, iy, "NOW PLAYING");
+        iy += fh + 2;
+        if (active && ambient_get_track(track, sizeof(track)))
+        {
+            display->set_foreground(pal.fg);
+            fit_text(display, track, width - 12);
+            display->putsxy(6, iy, track);
+            iy += fh + 2;
+            if (ambient_get_dir(dir, sizeof(dir)))
+            {
+                display->set_foreground(pal.dim);
+                fit_text(display, dir, width - 12);
+                display->putsxy(6, iy, dir);
+            }
+            iy += fh + 2;
+            if (ambient_get_index(&idx, &total))
+                snprintf(line, sizeof(line), "%s - %d of %d%s",
+                         ambient_mode_name(), idx, total,
+                         ambient_is_paused() ? " - paused" : "");
+            else
+                snprintf(line, sizeof(line), "%s", ambient_mode_name());
+            display->set_foreground(pal.accent);
+            display->putsxy(6, iy, line);
+        }
+        else
+        {
+            display->set_foreground(pal.fg);
+            display->putsxy(6, iy, "Nothing playing");
+            iy += fh + 2;
+            display->set_foreground(pal.dim);
+            snprintf(line, sizeof(line), "Mode: %s", ambient_mode_name());
+            display->putsxy(6, iy, line);
+        }
+
+        /* the rows */
+        for (int r = 0; r < AROW_COUNT; r++)
+        {
+            int y = ry + r * row_h;
+            bool is_sel = (r == sel);
+            const char *label = NULL;
+
+            if (is_sel)
+            {
+                display->set_foreground(pal.sel_bg);
+                display->fillrect(4, y, width - 8, row_h - 2);
+                display->set_foreground(pal.accent);
+                display->drawrect(4, y, width - 8, row_h - 2);
+            }
+            if (r == AROW_VOLUME)
+            {
+                draw_volume_row(display, &pal, is_sel, 4, y, width - 8,
+                                row_h - 2);
+                continue;
+            }
+            switch (r)
+            {
+                case AROW_PAUSE:
+                    label = ambient_is_paused() ? "Resume" : "Pause";
+                    break;
+                case AROW_STOP:   label = "Stop ambience"; break;
+                case AROW_RECENT: label = "Recent"; break;
+                case AROW_BROWSE: label = "Browse music"; break;
+            }
+            bool usable = active || r == AROW_RECENT || r == AROW_BROWSE;
+            display->set_foreground(!usable ? pal.dim :
+                                    is_sel ? pal.accent : pal.fg);
+            display->putsxy(12, y + (row_h - 2 - fh) / 2, label);
+            if (r == AROW_RECENT || r == AROW_BROWSE)
+                display->putsxy(width - 8 - 8, y + (row_h - 2 - fh) / 2, ">");
+        }
+
+        /* footer */
+        display->set_foreground(pal.dim);
+        display->hline(0, width - 1, fy);
+        display->putsxy(6, fy + 3, "L/R volume   MID select   BACK home");
+        display->update();
+
+        long button = button_get_w_tmo(HZ / 2);
+        switch (button)
+        {
+            case BUTTON_UP:
+            case BUTTON_UP | BUTTON_REPEAT:
+                sel = (sel + AROW_COUNT - 1) % AROW_COUNT;
+                break;
+            case BUTTON_DOWN:
+            case BUTTON_DOWN | BUTTON_REPEAT:
+                sel = (sel + 1) % AROW_COUNT;
+                break;
+            case BUTTON_LEFT:
+            case BUTTON_LEFT | BUTTON_REPEAT:
+            case BUTTON_RIGHT:
+            case BUTTON_RIGHT | BUTTON_REPEAT:
+            {
+                int v = ambient_get_volume();
+                v += (button & BUTTON_RIGHT) ? 5 : -5;
+                if (v < 0)
+                    v = 0;
+                if (v > 100)
+                    v = 100;
+                global_settings.ambient_volume = v;
+                ambient_set_volume(v);
+                break;
+            }
+            case BUTTON_SELECT | BUTTON_REL:
+                switch (sel)
+                {
+                    case AROW_PAUSE:
+                        if (ambient_is_active())
+                        {
+                            if (ambient_is_paused())
+                                ambient_resume();
+                            else
+                                ambient_pause();
+                            sleep(HZ / 20);
+                        }
+                        break;
+                    case AROW_STOP:
+                        if (ambient_is_active())
+                        {
+                            ambient_stop();
+                            sleep(HZ / 20);
+                        }
+                        break;
+                    case AROW_RECENT:
+                        recent_picker();
+                        display->set_viewport(vp);
+                        action_wait_for_release();
+                        sleep(HZ / 20);
+                        break;
+                    case AROW_BROWSE:
+                    {
+                        const char *dir = "/Music";
+                        DIR *dp = opendir(dir);
+                        if (dp)
+                            closedir(dp);
+                        else
+                        {
+                            splash(HZ * 2, "No /Music folder");
+                            dir = "/";
+                        }
+                        root_menu_browse_folder(dir);
+                        ambient_pick_mode = true;
+                        ambience_reopen = true;
+                        *result = GO_TO_FILEBROWSER;
+                        leave = true;
+                        done = true;
+                        break;
+                    }
+                }
+                break;
+            case BUTTON_BACK | BUTTON_REL:
+                done = true;
+                break;
+            case BUTTON_NONE:
+                break;
+            default:
+                if (default_event_handler(button) == SYS_USB_CONNECTED)
+                {
+                    *result = GO_TO_ROOT;
+                    leave = true;
+                    done = true;
+                }
+                break;
+        }
+    }
+    return leave;
 }
 
 /* ---- the screen -------------------------------------------------------- */
@@ -493,6 +808,17 @@ int homegrid_show(void)
     icons_load();
     action_wait_for_release();
 
+    /* the ambience page's file browser was closed: back to that page */
+    ambient_pick_mode = false;
+    if (ambience_reopen)
+    {
+        ambience_reopen = false;
+        selected_tile = TILE_AMBIENCE;
+        if (ambience_page(display, &vp, &result))
+            done = true;
+        display->set_viewport(&vp);
+    }
+
     while (!done)
     {
         palette_init(&pal);
@@ -512,7 +838,7 @@ int homegrid_show(void)
         int tw = (width - pad * (COLS + 1)) / COLS;
         int th = (gh - pad * (ROWS + 1)) / ROWS;
 
-        draw_header(display, &pal, width, hh);
+        draw_header(display, &pal, "Mp3 player", width, hh);
         for (int i = 0; i < NUM_TILES; i++)
         {
             int col = i % COLS, row = i / COLS;
@@ -547,6 +873,14 @@ int homegrid_show(void)
             case BUTTON_SELECT | BUTTON_REL:
             {
                 bool stay = false;
+                if (selected_tile == TILE_AMBIENCE)
+                {
+                    if (ambience_page(display, &vp, &result))
+                        done = true;
+                    display->set_viewport(&vp);
+                    action_wait_for_release();
+                    break;
+                }
                 result = open_tile(selected_tile, &stay);
                 if (stay)
                 {

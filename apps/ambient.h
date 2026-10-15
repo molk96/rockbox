@@ -15,6 +15,7 @@
 #define _AMBIENT_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 enum ambient_modes
 {
@@ -30,6 +31,24 @@ void ambient_stop(void);
 bool ambient_is_active(void);
 /* percent 0..100, relative to full scale */
 void ambient_set_volume(int percent);
+int ambient_get_volume(void);
+
+/* user pause from the ambience page (fades like the stop) */
+void ambient_pause(void);
+void ambient_resume(void);
+bool ambient_is_paused(void);
+
+/* what is playing: file name, its folder and "n of total" in play order */
+bool ambient_get_track(char *buf, size_t size);
+bool ambient_get_dir(char *buf, size_t size);
+bool ambient_get_index(int *index, int *total);
+
+/* the last ambient files/folders that were started, newest first, kept in
+ * /.rockbox/ambient_recent.txt */
+#define AMBIENT_RECENT_MAX 8
+void ambient_recent_add(const char *path);
+int ambient_recent_count(void);
+bool ambient_recent_get(int index, char *buf, size_t size);
 
 void ambient_sleepfade_restore(bool hardware);
 void sleep_preset_changed(int index);

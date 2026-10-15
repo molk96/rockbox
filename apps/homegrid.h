@@ -32,6 +32,10 @@ void homegrid_set_active(bool active);
 /* Runs the icon home until the user picks something that leaves it.
  * Returns a GO_TO_* code for the root menu loop. */
 int homegrid_show(void);
+
+/* true while the file browser was opened from the ambience page: picking a
+ * file there starts it as ambient */
+bool homegrid_ambient_pick(void);
 #endif
 
 #endif /* _HOMEGRID_H */

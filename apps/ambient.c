@@ -35,6 +35,8 @@
 #include "ambient_mp4.h"
 #include "sound.h"
 #include "powermgmt.h"
+#include "misc.h"
+#include "debug.h"
 #include "codecs/libmad/mad.h"
 
 /* Number of PCM frames queued towards the mixer and their length in
@@ -50,6 +52,8 @@ enum ambient_messages
 {
     Q_AMBIENT_PLAY = 1,
     Q_AMBIENT_STOP,
+    Q_AMBIENT_PAUSE,
+    Q_AMBIENT_RESUME,
 };
 
 /* Static buffers: no buflib allocation at run time, so starting the ambient
@@ -100,6 +104,7 @@ static struct event_queue amb_queue SHAREDBSS_ATTR;
 static bool amb_active;          /* a track list is loaded and playing */
 static bool amb_main_seen;       /* normal playback has been seen running */
 static bool amb_paused;
+static bool amb_user_paused;     /* paused from the ambience page */
 static int  amb_fd = -1;
 static bool amb_eof;
 static bool amb_interrupted;
@@ -851,6 +856,7 @@ static void amb_halt(void)
     amb_fade_to(65536, AMB_FADE_IN_STEP, AMB_AFTER_NONE);
     amb_main_seen = false;
     amb_paused = false;
+    amb_user_paused = false;
     amb_interrupted = false;
     amb_close_track();
     amb_stop_playback();
@@ -873,12 +879,12 @@ static void amb_follow_main(void)
             if (!amb_paused && amb_after == AMB_AFTER_NONE)
                 amb_fade_to(0, AMB_FADE_PAUSE_STEP, AMB_AFTER_PAUSE);
         }
-        else if (amb_after == AMB_AFTER_PAUSE)
+        else if (amb_after == AMB_AFTER_PAUSE && !amb_user_paused)
         {
             /* resumed before the fade finished */
             amb_fade_to(65536, AMB_FADE_IN_STEP, AMB_AFTER_NONE);
         }
-        else if (amb_paused)
+        else if (amb_paused && !amb_user_paused)
         {
             amb_paused = false;
             amb_fade_to(65536, AMB_FADE_IN_STEP, AMB_AFTER_NONE);
@@ -917,6 +923,42 @@ static void amb_thread(void)
             }
             else
                 amb_halt();
+            continue;
+        }
+        if (ev.id == Q_AMBIENT_PAUSE)
+        {
+            if (amb_active)
+            {
+                amb_user_paused = true;
+                if (!amb_paused && amb_after != AMB_AFTER_PAUSE &&
+                    amb_after != AMB_AFTER_HALT)
+                    amb_fade_to(0, AMB_FADE_PAUSE_STEP, AMB_AFTER_PAUSE);
+            }
+            continue;
+        }
+        if (ev.id == Q_AMBIENT_RESUME)
+        {
+            amb_user_paused = false;
+            if (amb_active)
+            {
+                int st = audio_status();
+                bool main_paused = (st & AUDIO_STATUS_PLAY) &&
+                                   (st & AUDIO_STATUS_PAUSE);
+                if (main_paused)
+                    ; /* stays paused until the main player resumes */
+                else if (amb_paused)
+                {
+                    amb_paused = false;
+                    amb_fade_to(65536, AMB_FADE_IN_STEP, AMB_AFTER_NONE);
+                    if (mixer_channel_status(PCM_MIXER_CHAN_AMBIENT) ==
+                        CHANNEL_PAUSED)
+                        mixer_channel_play_pause(PCM_MIXER_CHAN_AMBIENT, true);
+                    else
+                        amb_start_playback();
+                }
+                else if (amb_after == AMB_AFTER_PAUSE)
+                    amb_fade_to(65536, AMB_FADE_IN_STEP, AMB_AFTER_NONE);
+            }
             continue;
         }
         if (ev.id == Q_AMBIENT_PLAY)
@@ -1002,6 +1044,8 @@ bool ambient_start(const char *path)
     if (amb_thread_id == 0 || !path || !*path)
         return false;
 
+    ambient_recent_add(path);
+
     strlcpy(amb_req_path, path, sizeof (amb_req_path));
     queue_post(&amb_queue, Q_AMBIENT_PLAY, 0);
     return true;
@@ -1027,4 +1071,128 @@ void ambient_set_volume(int percent)
     amb_volume = percent;
     if (amb_thread_id != 0)
         amb_apply_volume();
+}
+
+void ambient_pause(void)
+{
+    if (amb_thread_id != 0)
+        queue_post(&amb_queue, Q_AMBIENT_PAUSE, 0);
+}
+
+void ambient_resume(void)
+{
+    if (amb_thread_id != 0)
+        queue_post(&amb_queue, Q_AMBIENT_RESUME, 0);
+}
+
+bool ambient_is_paused(void)
+{
+    return amb_active && amb_user_paused;
+}
+
+int ambient_get_volume(void)
+{
+    return amb_volume;
+}
+
+/* The values below belong to the ambient thread and are read here without
+ * locking, only to be shown on screen: a stale value is harmless. */
+bool ambient_get_track(char *buf, size_t size)
+{
+    int pos = amb_pos;
+    if (!amb_active || amb_nfiles <= 0 || pos < 0 || pos >= amb_nfiles)
+        return false;
+    strlcpy(buf, amb_names[amb_order[pos]], size);
+    return true;
+}
+
+bool ambient_get_dir(char *buf, size_t size)
+{
+    if (!amb_active)
+        return false;
+    strlcpy(buf, amb_dir, size);
+    return true;
+}
+
+bool ambient_get_index(int *index, int *total)
+{
+    int pos = amb_pos;
+    if (!amb_active || amb_nfiles <= 0 || pos < 0 || pos >= amb_nfiles)
+        return false;
+    *index = pos + 1;
+    *total = amb_nfiles;
+    return true;
+}
+
+/* ---- Recent list -------------------------------------------------------- */
+
+#define AMB_RECENT_FILE ROCKBOX_DIR "/ambient_recent.txt"
+
+static char amb_recent[AMBIENT_RECENT_MAX][MAX_PATH];
+static int amb_recent_n;
+static bool amb_recent_loaded;
+
+static void amb_recent_load(void)
+{
+    if (amb_recent_loaded)
+        return;
+    amb_recent_loaded = true;
+    amb_recent_n = 0;
+
+    int fd = open(AMB_RECENT_FILE, O_RDONLY);
+    if (fd < 0)
+        return;
+    while (amb_recent_n < AMBIENT_RECENT_MAX &&
+           read_line(fd, amb_recent[amb_recent_n], MAX_PATH) >= 0)
+    {
+        if (amb_recent[amb_recent_n][0] == '/')
+            amb_recent_n++;
+    }
+    close(fd);
+}
+
+static void amb_recent_save(void)
+{
+    int fd = open(AMB_RECENT_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (fd < 0)
+        return;
+    for (int i = 0; i < amb_recent_n; i++)
+        fdprintf(fd, "%s\n", amb_recent[i]);
+    close(fd);
+}
+
+void ambient_recent_add(const char *path)
+{
+    amb_recent_load();
+
+    /* drop an existing copy of the same path */
+    int i;
+    for (i = 0; i < amb_recent_n; i++)
+        if (!strcmp(amb_recent[i], path))
+            break;
+    if (i == amb_recent_n)
+    {
+        if (amb_recent_n < AMBIENT_RECENT_MAX)
+            amb_recent_n++;
+        i = amb_recent_n - 1;
+    }
+    for (; i > 0; i--)
+        strlcpy(amb_recent[i], amb_recent[i - 1], MAX_PATH);
+    strlcpy(amb_recent[0], path, MAX_PATH);
+    amb_recent_save();
+}
+
+int ambient_recent_count(void)
+{
+    amb_recent_load();
+    return amb_recent_n;
+}
+
+bool ambient_recent_get(int index, char *buf, size_t size)
+{
+    amb_recent_load();
+    if (index < 0 || index >= amb_recent_n)
+        return false;
+    strlcpy(buf, amb_recent[index], size);
+    return true;
 }
