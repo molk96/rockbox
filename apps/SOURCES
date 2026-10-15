@@ -32,6 +32,9 @@ buffering.c
 voice_thread.c
 ambient.c
 ambient_mp4.c
+#ifdef CREATIVE_ZENXFI
+homegrid.c
+#endif
 rbcodec_helpers.c
 menus/main_menu.c
 menus/playback_menu.c

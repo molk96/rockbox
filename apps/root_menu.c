@@ -38,6 +38,7 @@
 #include "talk.h"
 #include "audio.h"
 #include "shortcuts.h"
+#include "homegrid.h"
 
 #ifdef HAVE_HOTSWAP
 #include "storage.h"
@@ -102,6 +103,14 @@ static void rootmenu_start_playback_callback(unsigned short id, void *param)
 }
 #endif
 
+#ifdef HAVE_ICON_HOME
+static char browse_override[MAX_PATH];
+void root_menu_browse_folder(const char *dir)
+{
+    strmemccpy(browse_override, dir, MAX_PATH);
+}
+#endif
+
 static char current_track_path[MAX_PATH];
 static void rootmenu_track_changed_callback(unsigned short id, void* param)
 {
@@ -130,6 +139,14 @@ static int browser(void* param)
     {
         case GO_TO_FILEBROWSER:
             filter = global_settings.dirfilter;
+#ifdef HAVE_ICON_HOME
+            if (browse_override[0])
+            {
+                strmemccpy(folder, browse_override, MAX_PATH);
+                browse_override[0] = '\0';
+            }
+            else
+#endif
             if (global_settings.browse_current &&
                     last_screen == GO_TO_WPS &&
                     current_track_path[0])
@@ -401,6 +418,15 @@ static int radio(void* param)
 }
 #endif
 
+#ifdef HAVE_ICON_HOME
+static int iconhomescrn(void* param)
+{
+    (void)param;
+    homegrid_set_active(true);
+    return homegrid_show();
+}
+#endif
+
 static int miscscrn(void * param)
 {
     const struct menu_item_ex *menu = (const struct menu_item_ex*)param;
@@ -495,6 +521,9 @@ static const struct root_items items[] = {
     [GO_TO_PLAYLIST_VIEWER] = { playlist_view, NULL, &playlist_options },
     [GO_TO_SYSTEM_SCREEN] = { miscscrn, &info_menu, &system_menu },
     [GO_TO_SHORTCUTMENU] = { do_shortcut_menu, NULL, NULL },
+#ifdef HAVE_ICON_HOME
+    [GO_TO_ICONHOME] =      { iconhomescrn, NULL, NULL },
+#endif
 
 };
 #define NUM_ITEMS (int)(sizeof(items)/sizeof(*items))
@@ -542,6 +571,11 @@ MENUITEM_RETURNVALUE(playlists, ID2P(LANG_PLAYLISTS), GO_TO_PLAYLISTS_SCREEN,
                      NULL, Icon_Playlist);
 MENUITEM_RETURNVALUE(system_menu_, ID2P(LANG_SYSTEM), GO_TO_SYSTEM_SCREEN,
                      NULL, Icon_System_menu);
+#ifdef HAVE_ICON_HOME
+MENUITEM_RETURNVALUE(icon_home_item, (unsigned char *)"Icon Home",
+                     GO_TO_ICONHOME,
+                     NULL, Icon_Rockbox);
+#endif
 
 struct menu_item_ex root_menu_;
 static struct menu_callback_with_desc root_menu_desc = {
@@ -549,6 +583,9 @@ static struct menu_callback_with_desc root_menu_desc = {
 
 static struct menu_table menu_table[] = {
     /* Order here represents the default ordering */
+#ifdef HAVE_ICON_HOME
+    { "iconhome", &icon_home_item },
+#endif
     { "bookmarks", &bookmarks },
     { "files", &file_browser },
 #ifdef HAVE_TAGCACHE
@@ -617,6 +654,19 @@ void root_menu_load_from_cfg(void* setting, char *value)
     }
     if (!main_menu_added)
         root_menu__[menu_item_count++] = (struct menu_item_ex *)&menu_;
+#ifdef HAVE_ICON_HOME
+    /* a saved custom order may predate the Icon Home entry: always offer it,
+       otherwise there is no way back from the stock menu */
+    {
+        bool icon_home_added = false;
+        for (i = 0; i < menu_item_count; i++)
+            if (root_menu__[i] == (struct menu_item_ex *)&icon_home_item)
+                icon_home_added = true;
+        if (!icon_home_added && menu_item_count < MAX_MENU_ITEMS)
+            root_menu__[menu_item_count++] =
+                                        (struct menu_item_ex *)&icon_home_item;
+    }
+#endif
     root_menu_.flags |= MENU_ITEM_COUNT(menu_item_count);
     *(bool*)setting = true;
 }
@@ -955,6 +1005,15 @@ void root_menu(void)
             case MENU_SELECTED_EXIT:
                 /* fall through */
             case GO_TO_ROOT:
+#ifdef HAVE_ICON_HOME
+                if (homegrid_is_active())
+                {
+                    /* the icon home replaces the stock root menu until the
+                       user picks "Change mode" */
+                    next_screen = GO_TO_ICONHOME;
+                    break;
+                }
+#endif
                 if (last_screen != GO_TO_ROOT)
                     selected = get_selection(last_screen);
                 global_status.last_screen = GO_TO_ROOT; /* We've returned to ROOT */

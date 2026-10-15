@@ -63,10 +63,17 @@ enum {
     GO_TO_PLAYLISTS_SCREEN,
     GO_TO_PLAYLIST_VIEWER,
     GO_TO_SYSTEM_SCREEN,
-    GO_TO_SHORTCUTMENU
+    GO_TO_SHORTCUTMENU,
+    GO_TO_ICONHOME /* Zen X-Fi icon home page, see homegrid.c */
 };
 #ifndef PLUGIN
 extern struct menu_item_ex root_menu_;
+
+#include "homegrid.h"
+#ifdef HAVE_ICON_HOME
+/* make the next GO_TO_FILEBROWSER start in dir instead of the last folder */
+void root_menu_browse_folder(const char *dir);
+#endif
 
 void root_menu_load_from_cfg(void* setting, char *value);
 char* root_menu_write_to_cfg(void* setting, char*buf, int buf_len);
