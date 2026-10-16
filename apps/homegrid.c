@@ -506,6 +506,27 @@ static void fit_text(struct screen *d, char *text, int maxw)
     }
 }
 
+static int luma(unsigned c)
+{
+    return (RGB_UNPACK_RED(c) * 30 + RGB_UNPACK_GREEN(c) * 59 +
+            RGB_UNPACK_BLUE(c) * 11) / 100;
+}
+
+/* colour of the label under the selected icon: the accent when it can be
+   read on the selection fill, else black or white */
+static unsigned label_color(const struct palette *pal, bool selected)
+{
+    if (!selected)
+        return pal->fg;
+    int diff = luma(pal->accent) - luma(pal->sel_bg);
+    if (diff < 0)
+        diff = -diff;
+    if (diff >= 90)
+        return pal->accent;
+    return luma(pal->sel_bg) < 128 ? LCD_RGBPACK(255, 255, 255)
+                                   : LCD_RGBPACK(0, 0, 0);
+}
+
 static void draw_tile(struct screen *d, const struct palette *pal, int idx,
                       bool selected, int tx, int ty, int tw, int th, int fh)
 {
@@ -549,7 +570,7 @@ static void draw_tile(struct screen *d, const struct palette *pal, int idx,
     int w;
     tile_label(idx, label, sizeof(label));
     fit_text(d, label, tw - 4);
-    d->set_foreground(selected ? pal->accent : pal->fg);
+    d->set_foreground(label_color(pal, selected));
     d->getstringsize(label, &w, NULL);
     d->putsxy(tx + (tw - w) / 2, by + ICON_BOX + 2, label);
 }
