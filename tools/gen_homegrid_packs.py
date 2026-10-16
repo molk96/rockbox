@@ -15,9 +15,13 @@ without anti-aliasing for the pixel packs.
 Usage: tools/gen_homegrid_packs.py > apps/homegrid_packs.h
 """
 import io
+import os
 import sys
 from PIL import Image
 from playwright.sync_api import sync_playwright
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import homegrid_rich as RICH
 
 NAMES = ["book", "music", "mic", "cloud", "moon", "gear", "bolt", "list"]
 
@@ -194,23 +198,150 @@ def c_array(name, ctype, values, per_line):
     return "\n".join(out)
 
 
+# ---- retro dot-matrix (green / amber phosphor) ------------------------------
+GREEN = v("#3dff7a", h="#0f5a29", m="#1fa14f", s="#1fa14f", a="#7dffa8", b="#3dff7a", g="#010d06")
+AMBER = v("#ffb000", h="#6b4000", m="#b37400", s="#b37400", a="#ffd36b", b="#ffb000", g="#100800")
+
+
+def build_dotted(rend, cols):
+    """24x24 pixel glyphs rendered at 48x48 with one pixel of every 2x2 cell
+    left out, so the picture looks like a dot-matrix display."""
+    pal = []
+    pix = []
+    used = sorted(set(cols.values()))
+    for name in NAMES:
+        img = rend.render(pixel_svg(name, cols, 48), 48)
+        data = []
+        for y in range(48):
+            for x in range(48):
+                c = snap(img.getpixel((x, y)), used)
+                if c is None or (x % 2 == 1 and y % 2 == 1):
+                    data.append(0)
+                    continue
+                if c not in pal:
+                    pal.append(c)
+                data.append(pal.index(c) + 1)
+        pix.append(data)
+    entries = [(hexrgb(c)[0] << 16) | (hexrgb(c)[1] << 8) | hexrgb(c)[2] for c in pal]
+    return 48, 1, entries, pix
+
+
+def build_rich(rend, tag):
+    """XP, PS1, PS2: smooth or shaded vector pictures reduced to 62 colours."""
+    grads = getattr(RICH, tag + "_GRADS")
+    syms = dict(getattr(RICH, tag + "_SYMS"))
+    order = {"XP": ["book", "music", "mic", "cloud", "moon", "gear", "bolt", "win"],
+             "PS1": ["book", "music", "mic", "cloud", "moon", "gear", "bolt", "mode"],
+             "PS2": ["book", "music", "mic", "cloud", "moon", "gear", "bolt", "grid"]}[tag]
+    extra = ""
+    if tag == "PS1":
+        extra = ' shape-rendering="crispEdges"'
+    if tag == "PS2":
+        extra = (' fill="#2a56b0" stroke="#ffffff" stroke-width="1.1" '
+                 'stroke-linecap="round" stroke-linejoin="round"')
+    imgs = []
+    for n in order:
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" '
+               'viewBox="0 0 24 24"%s><defs>%s</defs>%s</svg>' % (extra, grads, syms[n]))
+        imgs.append(rend.render(svg, 48))
+    opaque = []
+    for im in imgs:
+        for y in range(48):
+            for x in range(48):
+                r, g, b, a = im.getpixel((x, y))
+                if a >= 128:
+                    opaque.append((r, g, b))
+    strip = Image.new("RGB", (len(opaque), 1))
+    strip.putdata(opaque)
+    q = strip.quantize(colors=62, method=Image.MEDIANCUT, dither=Image.NONE)
+    qp = q.getpalette()
+    qi = list(q.getdata())  # noqa
+    pal_used = sorted(set(qi))
+    remap = {c: i + 1 for i, c in enumerate(pal_used)}
+    entries = [(qp[c * 3] << 16) | (qp[c * 3 + 1] << 8) | qp[c * 3 + 2] for c in pal_used]
+    pix = []
+    k = 0
+    for im in imgs:
+        data = []
+        for y in range(48):
+            for x in range(48):
+                if im.getpixel((x, y))[3] >= 128:
+                    data.append(remap[qi[k]])
+                    k += 1
+                else:
+                    data.append(0)
+        pix.append(data)
+    return 48, 1, entries, pix
+
+
+def mix(a, b, pct):
+    """pct percent of b over a, both 'rrggbb'."""
+    ca = [int(a[i:i + 2], 16) for i in (0, 2, 4)]
+    cb = [int(b[i:i + 2], 16) for i in (0, 2, 4)]
+    return "".join("%02x" % ((x * (100 - pct) + y * pct) // 100) for x, y in zip(ca, cb))
+
+
 def main():
-    packs = []   # (name, own_colours, style, size, scale, pal, pix)
+    bases = []     # (size, scale, pal, pix)
+    entries = []   # (name, base, home[8], theme[5], grad)
+
+    def add_base(t):
+        bases.append(t)
+        return len(bases) - 1
+
     with sync_playwright() as pw:
         rend = Renderer(pw)
-        s, sc, pal, pix = build_color_pack(rend, WIN95)
-        packs.append(("Win95", True, ("008080", "ffffff", "c0c0c0", "ffff00", "006868",
-                                      "000080", "1084d0", "ffffff"), s, sc, pal, pix))
-        s, sc, pal, pix = build_color_pack(rend, WIN31)
-        packs.append(("Win 3.1", True, ("ffffff", "000000", "555555", "0000aa", "ccccff",
-                                        "0000aa", "0000aa", "ffffff"), s, sc, pal, pix))
-        s, sc, pal, pix = build_sys7(rend)
-        packs.append(("System 7 (theme)", False, None, s, sc, pal, pix))
-        s, sc, pal, pix = build_color_pack(rend, VAPOR)
-        packs.append(("Vaporwave 95", True, ("d9c8ff", "2b1055", "6b4fa0", "ff2d95", "c2a6f5",
-                                             "ff2d95", "00e5ff", "ffffff"), s, sc, pal, pix))
-        s, sc, pal, pix = build_line(rend)
-        packs.append(("Line minimal (theme)", False, None, s, sc, pal, pix))
+        b_w95 = add_base(build_color_pack(rend, WIN95))
+        b_w31 = add_base(build_color_pack(rend, WIN31))
+        b_xp = add_base(build_rich(rend, "XP"))
+        b_vap = add_base(build_color_pack(rend, VAPOR))
+        b_ps1 = add_base(build_rich(rend, "PS1"))
+        b_ps2 = add_base(build_rich(rend, "PS2"))
+        b_s7 = add_base(build_sys7(rend))
+        b_ln = add_base(build_line(rend))
+        b_gr = add_base(build_dotted(rend, GREEN))
+        b_am = add_base(build_dotted(rend, AMBER))
+
+    # home = bg, fg, dim, accent, sel_bg, hdr1, hdr2, hdr_fg
+    # theme = fg, bg, selector start, selector end, selector text, gradient
+    entries.append(("Win95", b_w95,
+        ("008080", "ffffff", "c0c0c0", "ffff00", "006868", "000080", "1084d0", "ffffff"),
+        ("000000", "c0c0c0", "000080", "000080", "ffffff", 0)))
+    entries.append(("Win 3.1", b_w31,
+        ("ffffff", "000000", "555555", "0000aa", "ccccff", "0000aa", "0000aa", "ffffff"),
+        ("000000", "ffffff", "0000aa", "0000aa", "ffffff", 0)))
+    entries.append(("Windows XP", b_xp,
+        ("f5f7fd", "000000", "6b7a99", "ffffff", "316ac5", "0a4ed8", "3d8bff", "ffffff"),
+        ("000000", "ffffff", "316ac5", "316ac5", "ffffff", 0)))
+    entries.append(("Vaporwave 95", b_vap,
+        ("d9c8ff", "2b1055", "6b4fa0", "ff2d95", "c2a6f5", "ff2d95", "00e5ff", "ffffff"),
+        ("2b1055", "d9c8ff", "ff2d95", "b0206a", "ffffff", 1)))
+    entries.append(("PlayStation 1", b_ps1,
+        ("07070b", "e8e8f4", "8c8ca4", "f0c040", "1a2c80", "9a9ab2", "50506a", "ffffff"),
+        ("e8e8f4", "07070b", "4a6fe8", "1a2c80", "ffffff", 1)))
+    entries.append(("PlayStation 2", b_ps2,
+        ("0a1c5e", "ffffff", "8fb4ff", "bfe8ff", "2a5ccc", "01061a", "2250c8", "ffffff"),
+        ("ffffff", "06124a", "3a78ee", "1b3f9e", "ffffff", 1)))
+    colours = [("white", "000000", "ffffff", "141414", "f7f6f2"),
+               ("green", "3dff7a", "021208", "3dff7a", "021208"),
+               ("amber", "ffb000", "140a00", "ffb000", "140a00"),
+               ("blue", "5aa9ff", "020a1a", "5aa9ff", "020a1a"),
+               ("red", "ff4a3d", "120202", "ff4a3d", "120202")]
+    for cname, fg, bg, lfg, lbg in colours:
+        entries.append(("System 7 " + cname, b_s7,
+            (bg, fg, mix(bg, fg, 55), bg, fg, bg, bg, fg),
+            (fg, bg, fg, fg, bg, 0)))
+    for cname, fg, bg, lfg, lbg in colours:
+        sel = mix(lbg, lfg, 18)
+        entries.append(("Line minimal " + cname, b_ln,
+            (lbg, lfg, mix(lbg, lfg, 55), lfg, sel, lbg, lbg, lfg),
+            (lfg, lbg, sel, sel, lfg, 0)))
+    entries.append(("Green retro", b_gr,
+        ("010d06", "3dff7a", "1fa14f", "7dffa8", "0f5a29", "010d06", "010d06", "3dff7a"),
+        ("3dff7a", "010d06", "0f5a29", "0f5a29", "3dff7a", 0)))
+    entries.append(("Amber retro", b_am,
+        ("100800", "ffb000", "b37400", "ffd36b", "6b4000", "100800", "100800", "ffb000"),
+        ("ffb000", "100800", "6b4000", "6b4000", "ffb000", 0)))
 
     o = []
     o.append("/* Generated by tools/gen_homegrid_packs.py, do not edit. */")
@@ -230,24 +361,27 @@ def main():
     o.append("    unsigned char scale;     /* every picture pixel is drawn scale x scale */")
     o.append("    unsigned char npal;")
     o.append("    unsigned char own_colors;/* the pack sets the page colours itself */")
-    o.append("    unsigned long bg, fg, dim, accent, sel_bg;   /* 0xRRGGBB */")
+    o.append("    unsigned long bg, fg, dim, accent, sel_bg;   /* home page, 0xRRGGBB */")
     o.append("    unsigned long hdr1, hdr2, hdr_fg;            /* header gradient and text */")
+    o.append("    unsigned long t_fg, t_bg, t_sel1, t_sel2, t_seltxt;  /* Rockbox theme */")
+    o.append("    unsigned char t_grad;    /* selector bar is a gradient */")
     o.append("    const unsigned long *pal;    /* index 1.. ; index 0 is transparent */")
     o.append("    const unsigned char *pix;    /* 8 pictures of size*size indexes */")
     o.append("};")
     o.append("")
-    for i, (name, own, style, size, scale, pal, pix) in enumerate(packs):
+    for i, (size, scale, pal, pix) in enumerate(bases):
         flat = [p for pic in pix for p in pic]
         o.append(c_array("pk%d_pal" % i, "unsigned long",
                          ["0x%08Xul" % e for e in pal], 8))
         o.append(c_array("pk%d_pix" % i, "unsigned char", flat, size))
         o.append("")
     o.append("static const struct icon_pack homegrid_packs[] = {")
-    for i, (name, own, style, size, scale, pal, pix) in enumerate(packs):
-        st = style or ("000000",) * 8
-        o.append('    { "%s", %d, %d, %d, %d,' % (name, size, scale, len(pal), 1 if own else 0))
-        o.append("      %s,\n      %s,\n      pk%d_pal, pk%d_pix }," % (
-            ", ".join("0x" + c for c in st[:5]), ", ".join("0x" + c for c in st[5:]), i, i))
+    for name, b, home, th in entries:
+        size, scale, pal, pix = bases[b]
+        o.append('    { "%s", %d, %d, %d, 1,' % (name, size, scale, len(pal)))
+        o.append("      %s,\n      %s,\n      %s, %d,\n      pk%d_pal, pk%d_pix }," % (
+            ", ".join("0x" + c for c in home[:5]), ", ".join("0x" + c for c in home[5:]),
+            ", ".join("0x" + c for c in th[:5]), th[5], b, b))
     o.append("};")
     o.append("#define HOMEGRID_NUM_PACKS ((int)(sizeof(homegrid_packs) / sizeof(homegrid_packs[0])))")
     o.append("")

@@ -31,6 +31,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "config.h"
 #include "system.h"
 #include "kernel.h"
@@ -190,20 +191,25 @@ static void pack_load(void)
     int fd = open(HOMEGRID_PACK_FILE, O_RDONLY);
     if (fd < 0)
         return;
-    char c = 0;
-    if (read(fd, &c, 1) == 1 && c >= '0' && c <= '9' &&
-        c - '0' <= HOMEGRID_NUM_PACKS)
-        pack_sel = c - '0';
+    char buf[8];
+    int n = read(fd, buf, sizeof(buf) - 1);
     close(fd);
+    if (n <= 0)
+        return;
+    buf[n] = '\0';
+    int v = atoi(buf);
+    if (v >= 0 && v <= HOMEGRID_NUM_PACKS)
+        pack_sel = v;
 }
 
 static void pack_save(void)
 {
+    char buf[8];
     int fd = open(HOMEGRID_PACK_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0666);
     if (fd < 0)
         return;
-    char c = '0' + pack_sel;
-    write(fd, &c, 1);
+    int n = snprintf(buf, sizeof(buf), "%d\n", pack_sel);
+    write(fd, buf, n);
     close(fd);
 }
 
@@ -234,6 +240,91 @@ static const char *pack_get_name(int item, void *data, char *buf, size_t len)
     return buf;
 }
 
+/* ---- the pack as a whole Rockbox theme ------------------------------------
+ * Choosing a pack writes a small theme (colours, selector bar, status bar and
+ * a Now Playing skin) from the data in the pack and loads it like any other
+ * theme, so lists, menus, settings, the file browser, the status bar and
+ * Now Playing all follow the pack. */
+
+#define PACK_THEME_CFG ROCKBOX_DIR "/pack_theme.cfg"
+#define PACK_THEME_WPS ROCKBOX_DIR "/wps/pack_theme.wps"
+
+/* pct percent of colour b over a, both 0xRRGGBB */
+static unsigned long mix_rgb(unsigned long a, unsigned long b, int pct)
+{
+    unsigned long out = 0;
+    for (int sh = 16; sh >= 0; sh -= 8)
+    {
+        unsigned long x = (a >> sh) & 0xff, y = (b >> sh) & 0xff;
+        out |= ((x * (100 - pct) + y * pct) / 100) << sh;
+    }
+    return out;
+}
+
+static bool pack_write_file(const char *name, const char *text)
+{
+    int fd = open(name, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (fd < 0)
+        return false;
+    int len = strlen(text);
+    bool ok = (write(fd, text, len) == len);
+    close(fd);
+    return ok;
+}
+
+static bool pack_apply_theme(const struct icon_pack *pk)
+{
+    char buf[1536];
+
+    mkdir(ROCKBOX_DIR "/wps");   /* fails harmlessly when it exists */
+    unsigned long dim = mix_rgb(pk->t_bg, pk->t_fg, 55);
+
+    /* Now Playing skin: art on the left, title, artist, album, times,
+       progress bar and a status line, under a header in the pack's colours */
+    snprintf(buf, sizeof(buf),
+        "# made by the icon home, pack %s\n"
+        "%%wd\n"
+        "%%V(0,0,320,24,1)\n%%Vb(%06lX)\n%%Vf(%06lX)\n%%al Now playing\n"
+        "%%V(236,0,80,24,1)\n%%Vb(%06lX)\n%%Vf(%06lX)\n%%ar%%cH:%%cM\n"
+        "%%V(12,34,120,120,-)\n%%Cl(0,0,120,120,c,c)\n%%?C<%%Cd|NO ART>\n"
+        "%%V(14,196,292,7,-)\n%%Vf(%06lX)\n%%pb(0,0,292,7,noborder)\n"
+        "%%V(148,45,164,18,1)\n%%Vf(%06lX)\n%%s%%?it<%%it|%%fn>\n"
+        "%%V(148,83,164,16,1)\n%%Vf(%06lX)\n%%s%%?ia<%%ia|%%?iA<%%iA|Unknown artist>>\n"
+        "%%V(148,117,164,16,1)\n%%Vf(%06lX)\n%%s%%?id<%%id|%%?d(1)<%%d(1)|Unknown album>>\n"
+        "%%V(148,140,164,14,1)\n%%Vf(%06lX)\n%%fc  %%fb kbps\n"
+        "%%V(12,176,100,14,1)\n%%Vf(%06lX)\n%%pc\n"
+        "%%V(208,176,100,14,1)\n%%Vf(%06lX)\n%%ar-%%pr\n"
+        "%%V(12,214,296,14,1)\n%%Vf(%06lX)\n"
+        "%%?mp<[STOP]|[PLAY]|[PAUSE]|[FF]|[REW]>  VOL %%pv dB\n",
+        pk->name,
+        pk->hdr1, pk->hdr_fg, pk->hdr1, pk->hdr_fg,
+        pk->t_fg, pk->t_fg, dim, dim, dim,
+        pk->t_fg, pk->t_fg, dim);
+    if (!pack_write_file(PACK_THEME_WPS, buf))
+        return false;
+
+    snprintf(buf, sizeof(buf),
+        "# made by the icon home, pack %s\n"
+        "foreground color: %06lX\n"
+        "background color: %06lX\n"
+        "selector type: %s\n"
+        "line selector start color: %06lX\n"
+        "line selector end color: %06lX\n"
+        "line selector text color: %06lX\n"
+        "list separator color: %06lX\n"
+        "statusbar: top\n"
+        "backdrop: -\n"
+        "filetype colours: -\n"
+        "wps: " PACK_THEME_WPS "\n",
+        pk->name, pk->t_fg, pk->t_bg,
+        pk->t_grad ? "bar (gradient)" : "bar (color)",
+        pk->t_sel1, pk->t_sel2, pk->t_seltxt,
+        mix_rgb(pk->t_bg, pk->t_fg, 25));
+    if (!pack_write_file(PACK_THEME_CFG, buf))
+        return false;
+    return settings_load_config(PACK_THEME_CFG, true);
+}
+
 /* Settings > Theme Settings > Home icon pack */
 int homegrid_pack_menu(void)
 {
@@ -250,6 +341,12 @@ int homegrid_pack_menu(void)
         return 0;
     pack_sel = info.selection;
     pack_save();
+    if (pack_sel > 0)
+    {
+        splash(0, ID2P(LANG_WAIT));
+        if (!pack_apply_theme(&homegrid_packs[pack_sel - 1]))
+            splash(HZ * 2, "Could not apply the theme");
+    }
     return 0;
 }
 
