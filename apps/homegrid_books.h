@@ -989,7 +989,7 @@ static void bk_text_centered(struct screen *d, int x, int w, int y,
 {
     int tw;
     d->getstringsize(text, &tw, NULL);
-    d->putsxy(x + (w - tw) / 2, y, text);
+    put_text(d, x + (w - tw) / 2, y, text);
 }
 
 static void bk_draw_tabs(struct screen *d, const struct palette *pal,
@@ -1011,7 +1011,7 @@ static void bk_draw_tabs(struct screen *d, const struct palette *pal,
             d->hline(x - 4, x + w + 3, y + h - 3);
         }
         d->set_foreground(i == tab ? pal->accent : pal->dim);
-        d->putsxy(x, y + (h - d->getcharheight()) / 2, labels[i]);
+        put_text(d, x, y + (h - d->getcharheight()) / 2, labels[i]);
         x += w + 20;
     }
 }
@@ -1236,13 +1236,13 @@ static bool books_page(struct screen *display, struct viewport *vp,
             display->set_foreground(pal.dim);
             if (bk_nbooks == 0)
             {
-                display->putsxy(6, ly + 6, "No books found");
-                display->putsxy(6, ly + 6 + fh + 2, "Put each book in");
-                display->putsxy(6, ly + 6 + 2 * (fh + 2),
+                put_text(display, 6, ly + 6, "No books found");
+                put_text(display, 6, ly + 6 + fh + 2, "Put each book in");
+                put_text(display, 6, ly + 6 + 2 * (fh + 2),
                                 BOOKS_ROOT "/<Title>");
             }
             else
-                display->putsxy(6, ly + 6, "Nothing recent yet");
+                put_text(display, 6, ly + 6, "Nothing recent yet");
         }
         else
         {
@@ -1262,17 +1262,17 @@ static bool books_page(struct screen *display, struct viewport *vp,
                 snprintf(name, sizeof(name), "%s", bk_books[bk_view[idx]].name);
                 fit_text(display, name, list_w - 12);
                 display->set_foreground(idx == sel ? pal.accent : pal.fg);
-                display->putsxy(6, y + (row_h - 1 - fh) / 2, name);
+                put_text(display, 6, y + (row_h - 1 - fh) / 2, name);
             }
             if (top > 0)
             {
                 display->set_foreground(pal.dim);
-                display->putsxy(list_w - 10, ly + 2, "^");
+                put_text(display, list_w - 10, ly + 2, "^");
             }
             if (top + visible < bk_nview)
             {
                 display->set_foreground(pal.dim);
-                display->putsxy(list_w - 10, fy - fh - 2, "v");
+                put_text(display, list_w - 10, fy - fh - 2, "v");
             }
             bk_draw_pane(display, &pal, bk_view[sel], stage == 2,
                          list_w + 4, width - list_w - 8, ly, bk_cover_side,
@@ -1282,7 +1282,7 @@ static bool books_page(struct screen *display, struct viewport *vp,
 
         display->set_foreground(pal.dim);
         display->hline(0, width - 1, fy);
-        display->putsxy(6, fy + 3, "L/R tab   MID open   BACK home");
+        put_text(display, 6, fy + 3, "L/R tab   MID open   BACK home");
         display->update();
 
         if (stage == 1)

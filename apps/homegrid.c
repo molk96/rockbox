@@ -506,6 +506,14 @@ static void fit_text(struct screen *d, char *text, int maxw)
     }
 }
 
+/* text without a background box, so it is readable on any fill */
+static void put_text(struct screen *d, int x, int y, const char *s)
+{
+    d->set_drawmode(DRMODE_FG);
+    d->putsxy(x, y, s);
+    d->set_drawmode(DRMODE_SOLID);
+}
+
 static int luma(unsigned c)
 {
     return (RGB_UNPACK_RED(c) * 30 + RGB_UNPACK_GREEN(c) * 59 +
@@ -572,7 +580,7 @@ static void draw_tile(struct screen *d, const struct palette *pal, int idx,
     fit_text(d, label, tw - 4);
     d->set_foreground(label_color(pal, selected));
     d->getstringsize(label, &w, NULL);
-    d->putsxy(tx + (tw - w) / 2, by + ICON_BOX + 2, label);
+    put_text(d, tx + (tw - w) / 2, by + ICON_BOX + 2, label);
 }
 
 static void format_clock(char *buf, size_t size)
@@ -613,7 +621,7 @@ static void draw_header(struct screen *d, const struct palette *pal,
 
     d->set_foreground(pal->hdr_on ? pal->hdr_fg : pal->fg);
     d->getstringsize(title, &w, &h);
-    d->putsxy(6, (hh - h) / 2, title);
+    put_text(d, 6, (hh - h) / 2, title);
 
     format_clock(tmp, sizeof(tmp));
     int level = battery_level();
@@ -628,14 +636,14 @@ static void draw_header(struct screen *d, const struct palette *pal,
     {
         d->getstringsize(tmp, &w, &h);
         x -= w;
-        d->putsxy(x, (hh - h) / 2, tmp);
+        put_text(d, x, (hh - h) / 2, tmp);
         x -= 10;
     }
     if (buf[0])
     {
         d->getstringsize(buf, &w, &h);
         x -= w;
-        d->putsxy(x, (hh - h) / 2, buf);
+        put_text(d, x, (hh - h) / 2, buf);
     }
 
     d->set_foreground(pal->dim);
@@ -662,7 +670,7 @@ static void draw_footer(struct screen *d, const struct palette *pal,
         d->getstringsize("AMB", &w, NULL);
         right -= w;
         d->set_foreground(pal->accent);
-        d->putsxy(right, ty, "AMB");
+        put_text(d, right, ty, "AMB");
         right -= 8;
     }
 
@@ -681,7 +689,7 @@ static void draw_footer(struct screen *d, const struct palette *pal,
         d->getstringsize(tbuf, &w, &h);
         right -= w;
         d->set_foreground(pal->dim);
-        d->putsxy(right, ty, tbuf);
+        put_text(d, right, ty, tbuf);
         right -= 8;
 
         /* trim the title so that it never runs into the time */
@@ -693,7 +701,7 @@ static void draw_footer(struct screen *d, const struct palette *pal,
             d->getstringsize(text, &w, NULL);
         }
         d->set_foreground(pal->fg);
-        d->putsxy(6, ty, text);
+        put_text(d, 6, ty, text);
 
         /* progress bar along the bottom edge */
         if (id3->length > 0)
@@ -711,7 +719,7 @@ static void draw_footer(struct screen *d, const struct palette *pal,
     else
     {
         d->set_foreground(pal->dim);
-        d->putsxy(6, ty, "Nothing playing");
+        put_text(d, 6, ty, "Nothing playing");
     }
     (void)fh;
 }
@@ -862,11 +870,11 @@ static void draw_volume_row(struct screen *d, const struct palette *pal,
 
     d->set_foreground(selected ? pal->accent : pal->fg);
     d->getstringsize("Volume", &tw, &th);
-    d->putsxy(x + 6, y + (h - th) / 2, "Volume");
+    put_text(d, x + 6, y + (h - th) / 2, "Volume");
 
     snprintf(pct, sizeof(pct), "%d%%", vol);
     d->getstringsize(pct, &tw, &th);
-    d->putsxy(x + w - 6 - tw, y + (h - th) / 2, pct);
+    put_text(d, x + w - 6 - tw, y + (h - th) / 2, pct);
 
     int d1, d2;
     d->getstringsize("Volume", &d1, NULL);
@@ -894,16 +902,16 @@ static void draw_track_row(struct screen *d, const struct palette *pal,
 
     d->set_foreground(!usable ? pal->dim : selected ? pal->accent : pal->fg);
     d->getstringsize("<", &tw, &th);
-    d->putsxy(x + 8, y + (h - th) / 2, "< Prev");
+    put_text(d, x + 8, y + (h - th) / 2, "< Prev");
     d->getstringsize("Next >", &tw, NULL);
-    d->putsxy(x + w - 8 - tw, y + (h - th) / 2, "Next >");
+    put_text(d, x + w - 8 - tw, y + (h - th) / 2, "Next >");
 
     if (usable && ambient_get_index(&idx, &total))
         snprintf(mid, sizeof(mid), "%d of %d", idx, total);
     else
         snprintf(mid, sizeof(mid), "Track");
     d->getstringsize(mid, &tw, NULL);
-    d->putsxy(x + (w - tw) / 2, y + (h - th) / 2, mid);
+    put_text(d, x + (w - tw) / 2, y + (h - th) / 2, mid);
 }
 
 /* Shows the ambience page. Returns true when the whole icon home should be
@@ -948,19 +956,19 @@ static bool ambience_page(struct screen *display, struct viewport *vp,
         /* what is playing */
         int iy = hh + 4;
         display->set_foreground(pal.dim);
-        display->putsxy(6, iy, "NOW PLAYING");
+        put_text(display, 6, iy, "NOW PLAYING");
         iy += fh + 2;
         if (active && ambient_get_track(track, sizeof(track)))
         {
             display->set_foreground(pal.fg);
             fit_text(display, track, width - 12);
-            display->putsxy(6, iy, track);
+            put_text(display, 6, iy, track);
             iy += fh + 2;
             if (ambient_get_dir(dir, sizeof(dir)))
             {
                 display->set_foreground(pal.dim);
                 fit_text(display, dir, width - 12);
-                display->putsxy(6, iy, dir);
+                put_text(display, 6, iy, dir);
             }
             iy += fh + 2;
             if (ambient_get_index(&idx, &total))
@@ -970,16 +978,16 @@ static bool ambience_page(struct screen *display, struct viewport *vp,
             else
                 snprintf(line, sizeof(line), "%s", ambient_mode_name());
             display->set_foreground(pal.accent);
-            display->putsxy(6, iy, line);
+            put_text(display, 6, iy, line);
         }
         else
         {
             display->set_foreground(pal.fg);
-            display->putsxy(6, iy, "Nothing playing");
+            put_text(display, 6, iy, "Nothing playing");
             iy += fh + 2;
             display->set_foreground(pal.dim);
             snprintf(line, sizeof(line), "Mode: %s", ambient_mode_name());
-            display->putsxy(6, iy, line);
+            put_text(display, 6, iy, line);
         }
 
         /* the rows */
@@ -1020,15 +1028,15 @@ static bool ambience_page(struct screen *display, struct viewport *vp,
             bool usable = active || r == AROW_RECENT || r == AROW_BROWSE;
             display->set_foreground(!usable ? pal.dim :
                                     is_sel ? pal.accent : pal.fg);
-            display->putsxy(12, y + (row_h - 2 - fh) / 2, label);
+            put_text(display, 12, y + (row_h - 2 - fh) / 2, label);
             if (r == AROW_RECENT || r == AROW_BROWSE)
-                display->putsxy(width - 8 - 8, y + (row_h - 2 - fh) / 2, ">");
+                put_text(display, width - 8 - 8, y + (row_h - 2 - fh) / 2, ">");
         }
 
         /* footer */
         display->set_foreground(pal.dim);
         display->hline(0, width - 1, fy);
-        display->putsxy(6, fy + 3, "L/R change   MID select   BACK home");
+        put_text(display, 6, fy + 3, "L/R change   MID select   BACK home");
         display->update();
 
         long button = button_get_w_tmo(HZ / 2);
