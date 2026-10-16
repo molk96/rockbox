@@ -75,6 +75,28 @@ struct bk_detail
 };
 static struct bk_detail bk_det = { .book = -1 };
 
+/* Everything shown about a book except the cover, kept in memory for the
+ * whole library so selecting a book draws its details at once. */
+struct bk_mem
+{
+    bool have;              /* title, author and length are known */
+    bool pos_known;         /* pos_s / started are known */
+    bool started;
+    short nf;               /* number of files when it was measured */
+    long off;               /* offset of its line in the cache file */
+    unsigned long total_s;
+    unsigned long pos_s;
+    char title[64];
+    char author[48];
+};
+static struct bk_mem bk_mem[BOOKS_MAX];
+
+/* last known position per book (survives leaving the page) */
+struct bk_posrec { unsigned long h; unsigned long pos_s; bool started; };
+static struct bk_posrec bk_posrec[BOOKS_MAX];
+static int bk_nposrec;
+static bool bk_fill_tried[BOOKS_MAX];
+
 static struct mp3entry bk_id3;
 static char bk_line[2816];      /* cache / bookmark lines */
 
@@ -321,79 +343,188 @@ static void bk_clean_copy(char *dst, size_t size, const char *src)
     dst[n] = '\0';
 }
 
-/* Looks the book up in the cache. The last matching line wins. */
-static bool bk_cache_lookup(const char *dir, struct bk_detail *det)
+static unsigned long bk_hash(const char *s)
 {
-    int fd = open(BOOKS_CACHE_FILE, O_RDONLY);
-    size_t dlen = strlen(dir);
-    bool found = false;
-
-    if (fd < 0)
-        return false;
-    while (read_line(fd, bk_line, sizeof(bk_line)) > 0)
-    {
-        if (strncmp(bk_line, dir, dlen) || bk_line[dlen] != '|')
-            continue;
-
-        char *f_n = bk_line + dlen + 1;
-        char *f_dur = strchr(f_n, '|');
-        if (!f_dur)
-            continue;
-        *f_dur++ = '\0';
-        char *f_title = strchr(f_dur, '|');
-        if (!f_title)
-            continue;
-        *f_title++ = '\0';
-        char *f_author = strchr(f_title, '|');
-        if (!f_author)
-            continue;
-        *f_author++ = '\0';
-
-        if (atoi(f_n) != bk_nf)
-            continue; /* the number of files changed: stale */
-
-        int i = 0;
-        char *p = f_dur;
-        while (*p && i < bk_nf)
-        {
-            bk_dur[i++] = strtoul(p, &p, 10);
-            if (*p == ',')
-                p++;
-        }
-        if (i != bk_nf)
-            continue;
-
-        strlcpy(det->title, f_title, sizeof(det->title));
-        strlcpy(det->author, f_author, sizeof(det->author));
-        found = true;
-    }
-    close(fd);
-    return found;
+    unsigned long h = 5381;
+    while (*s)
+        h = h * 33 + (unsigned char)*s++;
+    return h;
 }
 
-static void bk_cache_store(const char *dir, const struct bk_detail *det)
+static void bk_pos_remember(int book)
 {
+    unsigned long h = bk_hash(bk_books[book].path);
+    int i;
+    for (i = 0; i < bk_nposrec; i++)
+        if (bk_posrec[i].h == h)
+            break;
+    if (i == bk_nposrec)
+    {
+        if (i >= BOOKS_MAX)
+            return;
+        bk_nposrec++;
+    }
+    bk_posrec[i].h = h;
+    bk_posrec[i].pos_s = bk_mem[book].pos_s;
+    bk_posrec[i].started = bk_mem[book].started;
+}
+
+/* Parses one cache line "dir|nfiles|d1,d2,..|title|author". Returns the
+ * book index, or -1. When 'durs' is set the lengths are copied to bk_dur
+ * (only if the file count is 'want_nf'). */
+static int bk_cache_parse(char *line, bool durs, int want_nf, struct bk_mem *out)
+{
+    char *f_n = strchr(line, '|');
+    if (!f_n)
+        return -1;
+    *f_n++ = '\0';
+    char *f_dur = strchr(f_n, '|');
+    if (!f_dur)
+        return -1;
+    *f_dur++ = '\0';
+    char *f_title = strchr(f_dur, '|');
+    if (!f_title)
+        return -1;
+    *f_title++ = '\0';
+    char *f_author = strchr(f_title, '|');
+    if (!f_author)
+        return -1;
+    *f_author++ = '\0';
+
+    int n = atoi(f_n);
+    if (durs && n != want_nf)
+        return -1;
+    if (n > BK_FILES_MAX)
+        return -1;
+
+    unsigned long total = 0;
+    int i = 0;
+    char *p = f_dur;
+    while (*p && i < n)
+    {
+        unsigned long v = strtoul(p, &p, 10);
+        if (durs)
+            bk_dur[i] = v;
+        total += v;
+        i++;
+        if (*p == ',')
+            p++;
+    }
+    if (i != n)
+        return -1;
+
+    if (out)
+    {
+        out->nf = n;
+        out->total_s = total;
+        strlcpy(out->title, f_title, sizeof(out->title));
+        strlcpy(out->author, f_author, sizeof(out->author));
+    }
+    for (int b = 0; b < bk_nbooks; b++)
+        if (!strcmp(bk_books[b].path, line))
+            return b;
+    return -1;
+}
+
+/* Reads the whole cache file once and fills the in-memory table. */
+static void bk_mem_load(void)
+{
+    memset(bk_mem, 0, sizeof(bk_mem));
+    memset(bk_fill_tried, 0, sizeof(bk_fill_tried));
+
+    for (int b = 0; b < bk_nbooks; b++)
+    {
+        unsigned long h = bk_hash(bk_books[b].path);
+        for (int i = 0; i < bk_nposrec; i++)
+            if (bk_posrec[i].h == h)
+            {
+                bk_mem[b].pos_s = bk_posrec[i].pos_s;
+                bk_mem[b].started = bk_posrec[i].started;
+                bk_mem[b].pos_known = true;
+                break;
+            }
+    }
+
+    int fd = open(BOOKS_CACHE_FILE, O_RDONLY);
+    if (fd < 0)
+        return;
+    for (;;)
+    {
+        long off = lseek(fd, 0, SEEK_CUR);
+        if (read_line(fd, bk_line, sizeof(bk_line)) <= 0)
+            break;
+        struct bk_mem m;
+        memset(&m, 0, sizeof(m));
+        int b = bk_cache_parse(bk_line, false, 0, &m);
+        if (b < 0)
+            continue;
+        bool pk = bk_mem[b].pos_known, st = bk_mem[b].started;
+        unsigned long ps = bk_mem[b].pos_s;
+        bk_mem[b] = m;                      /* the last line wins */
+        bk_mem[b].have = true;
+        bk_mem[b].off = off;
+        bk_mem[b].pos_known = pk;
+        bk_mem[b].started = st;
+        bk_mem[b].pos_s = ps;
+        if (bk_mem[b].pos_known && bk_mem[b].pos_s > bk_mem[b].total_s &&
+            bk_mem[b].total_s)
+            bk_mem[b].pos_s = bk_mem[b].total_s;
+    }
+    close(fd);
+}
+
+/* Loads the file lengths of a book into bk_dur from its cache line.
+ * false when it has none or the number of files changed (stale). */
+static bool bk_cache_lookup(int book)
+{
+    if (!bk_mem[book].have)
+        return false;
+    int fd = open(BOOKS_CACHE_FILE, O_RDONLY);
+    if (fd < 0)
+        return false;
+    bool ok = false;
+    if (lseek(fd, bk_mem[book].off, SEEK_SET) >= 0 &&
+        read_line(fd, bk_line, sizeof(bk_line)) > 0)
+        ok = (bk_cache_parse(bk_line, true, bk_nf, NULL) == book);
+    close(fd);
+    return ok;
+}
+
+/* Appends the measured book (bk_dur, title, author in bk_mem) to the file. */
+static void bk_cache_store(int book)
+{
+    struct bk_mem *m = &bk_mem[book];
+    const char *dir = bk_books[book].path;
     int fd = open(BOOKS_CACHE_FILE, O_WRONLY | O_CREAT | O_APPEND, 0666);
     int n;
 
     if (fd < 0)
         return;
+    long off = lseek(fd, 0, SEEK_END);
     n = snprintf(bk_line, sizeof(bk_line), "%s|%d|", dir, bk_nf);
     for (int i = 0; i < bk_nf && n > 0 && n < (int)sizeof(bk_line) - 16; i++)
         n += snprintf(bk_line + n, sizeof(bk_line) - n, "%s%lu",
                       i ? "," : "", bk_dur[i]);
     if (n > 0 && n < (int)sizeof(bk_line) - 200)
         snprintf(bk_line + n, sizeof(bk_line) - n, "|%s|%s\n",
-                 det->title, det->author);
+                 m->title, m->author);
     else
         bk_line[0] = '\0'; /* does not fit: do not cache */
     if (bk_line[0])
+    {
         write(fd, bk_line, strlen(bk_line));
+        m->off = off;
+    }
     close(fd);
+    m->have = true;
+    m->nf = bk_nf;
+    m->total_s = 0;
+    for (int i = 0; i < bk_nf; i++)
+        m->total_s += bk_dur[i];
 }
 
 /* reads the length of every file (slow, so the result is cached) */
-static void bk_measure(const struct bk_book *book, struct bk_detail *det)
+static void bk_measure(const struct bk_book *book, struct bk_mem *det)
 {
     char path[MAX_PATH];
     char title[64] = "", author[48] = "";
@@ -708,7 +839,30 @@ static void bk_load_stage1(int book)
     bk_cover_load(b);
 }
 
-/* Stage 2: title, author, length and progress (slow the first time). */
+/* Works out the position from the bookmark; needs bk_files and bk_dur. */
+static void bk_refresh_pos(int book)
+{
+    struct bk_mem *m = &bk_mem[book];
+    unsigned long pos;
+
+    m->total_s = 0;
+    for (int i = 0; i < bk_nf; i++)
+        m->total_s += bk_dur[i];
+    if (bk_read_progress(bk_books[book].path, &pos))
+    {
+        m->started = true;
+        m->pos_s = (m->total_s && pos > m->total_s) ? m->total_s : pos;
+    }
+    else
+    {
+        m->started = false;
+        m->pos_s = 0;
+    }
+    m->pos_known = true;
+    bk_pos_remember(book);
+}
+
+/* Stage 2: makes sure the details are right (slow only the first time). */
 static void bk_load_stage2(int book)
 {
     const struct bk_book *b = &bk_books[book];
@@ -717,33 +871,26 @@ static void bk_load_stage2(int book)
     if (det->book != book)
         return;
     bk_pre_info[book] = true;
-    if (!bk_cache_lookup(b->path, det))
+    if (!bk_cache_lookup(book))
     {
-        bk_measure(b, det);
-        bk_cache_store(b->path, det);
+        bk_measure(b, &bk_mem[book]);
+        bk_cache_store(book);
     }
-    for (int i = 0; i < bk_nf; i++)
-        det->total_s += bk_dur[i];
-
-    unsigned long pos;
-    if (bk_read_progress(b->path, &pos))
-    {
-        det->started = true;
-        det->pos_s = (det->total_s && pos > det->total_s) ? det->total_s : pos;
-    }
+    bk_refresh_pos(book);
     det->info = true;
 }
 
 /* ---- preparing the neighbours while idle ----------------------------------- */
 
-/* Does one piece of preparation work for a book near the shown one: its
- * cover into the cover cache, or its file lengths into the length cache.
- * Returns false when everything nearby is ready. It is called when nothing
- * has been pressed for a moment, so the next book opens instantly. */
+/* Does one piece of preparation work: first the books near the shown one
+ * (cover into the cover cache, file lengths into the length cache), then
+ * the details of the whole library, recent books first. Returns false when
+ * everything is ready. It is called when nothing has been pressed for a
+ * moment, so the next book opens instantly. */
 static bool bk_precache_step(int sel)
 {
     struct bk_detail keep_det = bk_det;
-    bool did = false;
+    bool did = false, did_cover = false;
 
     for (int dist = 1; dist <= 6 && !did; dist++)
     {
@@ -762,32 +909,66 @@ static bool bk_precache_step(int sel)
                 {
                     bk_list_files(b->path);
                     bk_cover_load(b);   /* decodes and fills the cache */
-                    did = true;
+                    did = did_cover = true;
                 }
             }
             else if (!bk_pre_info[book])
             {
-                struct bk_detail tmp;
                 bk_pre_info[book] = true;
+                bk_fill_tried[book] = true;
                 bk_list_files(b->path);
-                memset(&tmp, 0, sizeof(tmp));
-                if (!bk_cache_lookup(b->path, &tmp))
+                if (!bk_cache_lookup(book))
                 {
-                    bk_measure(b, &tmp);
-                    bk_cache_store(b->path, &tmp);
+                    bk_measure(b, &bk_mem[book]);
+                    bk_cache_store(book);
+                    bk_refresh_pos(book);
+                    did = true;
+                }
+                else if (!bk_mem[book].pos_known)
+                {
+                    bk_refresh_pos(book);
                     did = true;
                 }
             }
         }
     }
 
+    /* the rest of the library: recent books first, then the others */
+    for (int k = 0; k < bk_recent_n + bk_nbooks && !did; k++)
+    {
+        int book = -1;
+        if (k < bk_recent_n)
+        {
+            for (int i = 0; i < bk_nbooks; i++)
+                if (!strcmp(bk_books[i].path, bk_recent[k]))
+                {
+                    book = i;
+                    break;
+                }
+        }
+        else
+            book = k - bk_recent_n;
+        if (book < 0 || bk_fill_tried[book])
+            continue;
+        bk_fill_tried[book] = true;
+        bk_list_files(bk_books[book].path);
+        if (!bk_cache_lookup(book))
+        {
+            bk_measure(&bk_books[book], &bk_mem[book]);
+            bk_cache_store(book);
+            bk_refresh_pos(book);
+            did = true;
+        }
+    }
+
     if (did && keep_det.book >= 0)
     {
-        /* the shared cover buffer now holds a neighbour's cover: put the
-           shown one back (from the cache, so this is quick) */
+        /* the shared buffers now hold a neighbour's data: put the shown
+           book back (the cover comes from the cache, so this is quick) */
         bk_det = keep_det;
         bk_list_files(bk_books[keep_det.book].path);
-        bk_cover_load(&bk_books[keep_det.book]);
+        if (did_cover)
+            bk_cover_load(&bk_books[keep_det.book]);
     }
     return did;
 }
@@ -844,7 +1025,8 @@ static void bk_draw_pane(struct screen *d, const struct palette *pal,
     char line[48];
     const struct bk_book *b = &bk_books[sel_book];
     bool have = (bk_det.book == sel_book);
-    bool info = have && bk_det.info;
+    const struct bk_mem *m = &bk_mem[sel_book];
+    bool info = m->have;
 
     /* cover or placeholder */
     if (have && bk_cover_ok)
@@ -865,31 +1047,33 @@ static void bk_draw_pane(struct screen *d, const struct palette *pal,
     }
     y += side + 4;
 
-    if (info && bk_det.total_s > 0)
+    if (info && m->total_s > 0)
     {
-        int pct = (int)(bk_det.pos_s * 100 / bk_det.total_s);
-        int fill = (int)((side - 2) * (unsigned long long)bk_det.pos_s /
-                         bk_det.total_s);
+        unsigned long pos_s = m->pos_known ? m->pos_s : 0;
+        int pct = (int)(pos_s * 100 / m->total_s);
+        int fill = (int)((side - 2) * (unsigned long long)pos_s /
+                         m->total_s);
         d->set_foreground(pal->dim);
         d->drawrect(x, y, side, 6);
         d->set_foreground(pal->accent);
         d->fillrect(x + 1, y + 1, fill, 4);
         y += 8;
 
-        if (bk_det.started)
+        if (m->pos_known && m->started)
         {
             snprintf(line, sizeof(line), "%d%% completed", pct);
             d->set_foreground(pal->accent);
             bk_text_centered(d, px, pw, y, line);
             y += fh + 2;
-            bk_format_left(line, sizeof(line), bk_det.total_s - bk_det.pos_s);
+            bk_format_left(line, sizeof(line), m->total_s - m->pos_s);
         }
         else
         {
             d->set_foreground(pal->accent);
-            bk_text_centered(d, px, pw, y, "Not started");
+            if (m->pos_known)
+                bk_text_centered(d, px, pw, y, "Not started");
             y += fh + 2;
-            bk_format_left(line, sizeof(line), bk_det.total_s);
+            bk_format_left(line, sizeof(line), m->total_s);
         }
         d->set_foreground(pal->dim);
         bk_text_centered(d, px, pw, y, line);
@@ -897,17 +1081,12 @@ static void bk_draw_pane(struct screen *d, const struct palette *pal,
     }
     else
     {
-        y += 8;
-        if (reading)
-        {
-            d->set_foreground(pal->dim);
-            bk_text_centered(d, px, pw, y, "Reading...");
-        }
-        y += 2 * (fh + 2);
+        (void)reading;
+        y += 8 + 2 * (fh + 2);
     }
 
     /* title and author */
-    snprintf(line, sizeof(line), "%s", info && bk_det.title[0] ? bk_det.title
+    snprintf(line, sizeof(line), "%s", info && m->title[0] ? m->title
                                                               : b->name);
     fit_text(d, line, pw - 4);
     d->set_foreground(pal->fg);
@@ -915,7 +1094,7 @@ static void bk_draw_pane(struct screen *d, const struct palette *pal,
     y += fh + 2;
 
     snprintf(line, sizeof(line), "%s",
-             info ? bk_det.author : b->parent);
+             info ? m->author : b->parent);
     if (line[0])
     {
         fit_text(d, line, pw - 4);
@@ -993,6 +1172,7 @@ static bool books_page(struct screen *display, struct viewport *vp,
     bk_scan();
     bk_recent_load();
     bk_sync_playing();
+    bk_mem_load();
     bk_det.book = -1;
     memset(bk_pre_cover, 0, sizeof(bk_pre_cover));
     memset(bk_pre_info, 0, sizeof(bk_pre_info));
