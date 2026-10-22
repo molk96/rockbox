@@ -1003,7 +1003,7 @@ static int open_tile(int idx, bool *stay)
             *stay = true;
             return GO_TO_ROOT;
         case TILE_VIDEO:
-            return home_browse_folder("/Video");
+            return home_browse_folder("/Videos");
         case TILE_SETTINGS:
             settings_page();
             *stay = true;
