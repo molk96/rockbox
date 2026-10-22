@@ -23,7 +23,7 @@ from playwright.sync_api import sync_playwright
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import homegrid_rich as RICH
 
-NAMES = ["book", "music", "mic", "cloud", "moon", "gear", "bolt", "list"]
+NAMES = ["book", "music", "mic", "cloud", "moon", "gear", "video", "list"]
 
 # ---- 24x24 pixel glyphs (classes k h m s a b g = colour roles) -----------
 GLYPHS = {
@@ -33,7 +33,7 @@ GLYPHS = {
 "cloud": '<path class="k" d="M8 4h6v1h3v1h2v2h2v1h1v6h-1v1H5v-1H3v-1H2V9h1V8h2V7h1V5h2z"/><path class="h" d="M9 5h4v1h3v1h2v2h2v1h1v4h-1v1H6v-1H4v-1H3V9h1V8h2V7h1V6h2z"/><rect class="m" x="4" y="13" width="16" height="2"/><path class="a" d="M6 18h1v3H6zM10 19h1v3h-1zM14 18h1v3h-1zM18 19h1v3h-1z"/>',
 "moon": '<path class="k" d="M15 2A10 10 0 1 0 22 17 8 8 0 0 1 15 2z"/><path class="m" d="M14.5 4.5A8 8 0 1 0 20 16.5 6.5 6.5 0 0 1 14.5 4.5z"/><rect class="h" x="5" y="10" width="1" height="4"/><rect class="h" x="6" y="8" width="1" height="2"/><path class="a" d="M20 4h1v3h-1zM19 5h3v1h-3zM21 10h1v1h-1zM17 8h1v1h-1z"/>',
 "gear": '<rect class="k" x="10" y="1" width="4" height="22"/><rect class="k" x="1" y="10" width="22" height="4"/><rect class="k" x="10" y="1" width="4" height="22" transform="rotate(45 12 12)"/><rect class="k" x="10" y="1" width="4" height="22" transform="rotate(-45 12 12)"/><circle class="k" cx="12" cy="12" r="9.5"/><circle class="m" cx="12" cy="12" r="8"/><path class="h" d="M6 11a6 6 0 0 1 6-6v2a4 4 0 0 0-4 4z"/><circle class="k" cx="12" cy="12" r="4"/><circle class="g" cx="12" cy="12" r="3"/>',
-"bolt": '<path class="k" d="M15 1L4 13h6l-2 10L21 9h-6z"/><path class="a" d="M14 4L7.5 12H12l-1 6 6.5-7H13z"/><path class="h" d="M13 5L9 10h2z"/>',
+"video": '<rect class="k" x="1" y="4" width="22" height="16"/><rect class="h" x="2" y="5" width="20" height="14"/><path class="a" d="M9 8l8 4-8 4z"/><rect class="m" x="8" y="20" width="8" height="2"/>',
 "list": '<rect class="k" x="1" y="3" width="22" height="18"/><rect class="b" x="2" y="4" width="20" height="3"/><rect class="h" x="2" y="7" width="20" height="13"/><rect class="m" x="2" y="19" width="20" height="1"/><rect class="h" x="18" y="5" width="2" height="1"/><path class="a" d="M4 9h2v2H4zM4 13h2v2H4zM4 17h2v2H4z"/><path class="m" d="M8 9h12v2H8zM8 13h12v2H8zM8 17h9v2H8z"/>',
 }
 
@@ -45,7 +45,7 @@ LINE = {
 "cloud": ("M3 12h2M7 8v8M11 4v16M15 8v8M19 10v4", "round", "round"),
 "moon": ("M20 14.5A8 8 0 119.5 4a6.5 6.5 0 0010.5 10.5z", "round", "round"),
 "gear": ("M4 7h9M17 7h3M4 17h3M11 17h9M15 5v4M9 15v4", "round", "round"),
-"bolt": ("M13 2L4 14h7l-1 8 9-12h-7z", "butt", "round"),
+"video": ("M3 5h18v13H3zM10 8.5l5 3.5-5 3.5zM8 21h8", "round", "round"),
 "list": ("M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z", "butt", "round"),
 }
 
@@ -59,7 +59,7 @@ WIN95 = [
     v("#000000", h="#ffffff", m="#c0c0c0", a="#0000ff"),
     v("#000000", m="#ffff00", h="#ffffaa", a="#ffffff"),
     v("#000000", m="#c0c0c0", h="#ffffff", g="#008080"),
-    v("#000000", a="#ffff00", h="#ffffff"),
+    v("#000000", h="#000080", a="#ffff00", m="#c0c0c0"),
     v("#000000", b="#000080", h="#ffffff", a="#008080", m="#808080"),
 ]
 WIN31 = [
@@ -69,7 +69,7 @@ WIN31 = [
     v("#000000", h="#55ffff", m="#00aaaa", a="#0000aa"),
     v("#000000", m="#aaaa00", h="#ffff55", a="#0000aa"),
     v("#000000", m="#aaaaaa", h="#ffffff", g="#ffffff"),
-    v("#000000", a="#ffff55", h="#ffffff"),
+    v("#000000", h="#0000aa", a="#ffff55", m="#aaaaaa"),
     v("#000000", b="#0000aa", h="#ffffff", a="#aa0000", m="#00aaaa"),
 ]
 VAPOR = [
@@ -79,7 +79,7 @@ VAPOR = [
     v("#2b1055", h="#b8fff6", m="#7fd9ff", a="#ff2d95"),
     v("#2b1055", m="#9a5cff", h="#e0c8ff", a="#ff2d95"),
     v("#2b1055", m="#00e5ff", h="#e0ffff", g="#d9c8ff"),
-    v("#2b1055", a="#ffe14d", h="#ffffff"),
+    v("#2b1055", h="#7b2dff", a="#ffe14d", m="#d9c8ff"),
     v("#2b1055", b="#ff2d95", h="#ffffff", a="#7b2dff", m="#d9c8ff"),
 ]
 # System 7: 1-bit; k s a b = ink, h g = paper, m = 50% dither
@@ -230,9 +230,9 @@ def build_rich(rend, tag):
     """XP, PS1, PS2: smooth or shaded vector pictures reduced to 62 colours."""
     grads = getattr(RICH, tag + "_GRADS")
     syms = dict(getattr(RICH, tag + "_SYMS"))
-    order = {"XP": ["book", "music", "mic", "cloud", "moon", "gear", "bolt", "win"],
-             "PS1": ["book", "music", "mic", "cloud", "moon", "gear", "bolt", "mode"],
-             "PS2": ["book", "music", "mic", "cloud", "moon", "gear", "bolt", "grid"]}[tag]
+    order = {"XP": ["book", "music", "mic", "cloud", "moon", "gear", "video", "win"],
+             "PS1": ["book", "music", "mic", "cloud", "moon", "gear", "video", "mode"],
+             "PS2": ["book", "music", "mic", "cloud", "moon", "gear", "video", "grid"]}[tag]
     extra = ""
     if tag == "PS1":
         extra = ' shape-rendering="crispEdges"'
@@ -279,6 +279,16 @@ def mix(a, b, pct):
     ca = [int(a[i:i + 2], 16) for i in (0, 2, 4)]
     cb = [int(b[i:i + 2], 16) for i in (0, 2, 4)]
     return "".join("%02x" % ((x * (100 - pct) + y * pct) // 100) for x, y in zip(ca, cb))
+
+
+def tint_for(name, th):
+    """Wash colour of a pack: its accent colour; none for the black on white
+    packs."""
+    if name.endswith("white"):
+        return "000000"
+    return {"Win95": "008080", "Win 3.1": "0000aa", "Windows XP": "316ac5",
+            "Vaporwave 95": "ff2d95", "PlayStation 1": "4a6fe8",
+            "PlayStation 2": "3a78ee"}.get(name, th[0])
 
 
 def main():
@@ -365,6 +375,7 @@ def main():
     o.append("    unsigned long hdr1, hdr2, hdr_fg;            /* header gradient and text */")
     o.append("    unsigned long t_fg, t_bg, t_sel1, t_sel2, t_seltxt;  /* Rockbox theme */")
     o.append("    unsigned char t_grad;    /* selector bar is a gradient */")
+    o.append("    unsigned long tint;      /* colour wash over cover art, 0 = none */")
     o.append("    const unsigned long *pal;    /* index 1.. ; index 0 is transparent */")
     o.append("    const unsigned char *pix;    /* 8 pictures of size*size indexes */")
     o.append("};")
@@ -379,9 +390,9 @@ def main():
     for name, b, home, th in entries:
         size, scale, pal, pix = bases[b]
         o.append('    { "%s", %d, %d, %d, 1,' % (name, size, scale, len(pal)))
-        o.append("      %s,\n      %s,\n      %s, %d,\n      pk%d_pal, pk%d_pix }," % (
+        o.append("      %s,\n      %s,\n      %s, %d, 0x%s,\n      pk%d_pal, pk%d_pix }," % (
             ", ".join("0x" + c for c in home[:5]), ", ".join("0x" + c for c in home[5:]),
-            ", ".join("0x" + c for c in th[:5]), th[5], b, b))
+            ", ".join("0x" + c for c in th[:5]), th[5], tint_for(name, th), b, b))
     o.append("};")
     o.append("#define HOMEGRID_NUM_PACKS ((int)(sizeof(homegrid_packs) / sizeof(homegrid_packs[0])))")
     o.append("")

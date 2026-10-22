@@ -24,6 +24,7 @@
 
 #ifdef HAVE_ICON_HOME
 #include <stdbool.h>
+#include "lcd.h"
 
 /* true while the icon home is the "root" screen (it is on after boot) */
 bool homegrid_is_active(void);
@@ -39,6 +40,13 @@ bool homegrid_ambient_pick(void);
 
 /* Settings > Theme Settings > Home icon pack: pick the icon pack */
 int homegrid_pack_menu(void);
+
+/* colour wash over cover and album art (Settings > Tint). Active when tint
+ * is on and the pack has a wash colour. homegrid_tint_pixels() copies a
+ * w x h picture (source row length 'stride' pixels) into dst with the wash. */
+bool homegrid_tint_active(void);
+void homegrid_tint_pixels(fb_data *dst, const fb_data *src, int w, int h,
+                          int stride);
 #endif
 
 #endif /* _HOMEGRID_H */

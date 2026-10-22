@@ -1031,7 +1031,16 @@ static void bk_draw_pane(struct screen *d, const struct palette *pal,
     /* cover or placeholder */
     if (have && bk_cover_ok)
     {
-        d->bitmap(bk_cover_bm.data,
+        const fb_data *cpix = (const fb_data *)bk_cover_bm.data;
+        static fb_data tinted[98 * 98];
+        if (bk_cover_bm.width * bk_cover_bm.height <= 98 * 98 &&
+            homegrid_tint_active())
+        {
+            homegrid_tint_pixels(tinted, cpix, bk_cover_bm.width,
+                                 bk_cover_bm.height, bk_cover_bm.width);
+            cpix = tinted;
+        }
+        d->bitmap(cpix,
                   x + (side - bk_cover_bm.width) / 2,
                   y + (side - bk_cover_bm.height) / 2,
                   bk_cover_bm.width, bk_cover_bm.height);

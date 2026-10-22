@@ -50,6 +50,7 @@
 #include "root_menu.h"
 #include "ambient.h"
 #include "powermgmt.h"
+#include "power.h"
 #include "timefuncs.h"
 #include "metadata.h"
 #include "list.h"
@@ -61,6 +62,7 @@
 #include "bookmark.h"
 #include "chapters.h"
 #include "menu.h"
+#include "menus/exported_menus.h"
 #include "playlist.h"
 #include "filetypes.h"
 #include "strnatcmp.h"
@@ -90,7 +92,7 @@ enum tile_id
     TILE_AMBIENCE,
     TILE_SLEEP,
     TILE_SETTINGS,
-    TILE_SHORTCUTS,
+    TILE_VIDEO,
     TILE_MODE,
 };
 
@@ -107,7 +109,7 @@ static const struct tile_info tiles[NUM_TILES] = {
     [TILE_AMBIENCE]   = { "Ambience",    "ambience.bmp" },
     [TILE_SLEEP]      = { "Sleep",       "sleep.bmp" },
     [TILE_SETTINGS]   = { "Settings",    "settings.bmp" },
-    [TILE_SHORTCUTS]  = { "Shortcuts",   "shortcuts.bmp" },
+    [TILE_VIDEO]      = { "Video",       "video.bmp" },
     [TILE_MODE]       = { "Mode",        "mode.bmp" },
 };
 
@@ -348,6 +350,221 @@ int homegrid_pack_menu(void)
             splash(HZ * 2, "Could not apply the theme");
     }
     return 0;
+}
+
+/* ---- tint: a light colour wash over cover and album art ---------------- */
+
+#define HOMEGRID_TINT_FILE ROCKBOX_DIR "/home_tint.cfg"
+
+static bool tint_on = true;
+static int tint_pct = 30;           /* 10..60 */
+static bool tint_loaded = false;
+
+static void tint_load(void)
+{
+    if (tint_loaded)
+        return;
+    tint_loaded = true;
+    int fd = open(HOMEGRID_TINT_FILE, O_RDONLY);
+    if (fd < 0)
+        return;
+    char buf[16];
+    int n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0)
+        return;
+    buf[n] = '\0';
+    tint_on = atoi(buf) != 0;
+    char *sp = strchr(buf, ' ');
+    if (sp)
+    {
+        int v = atoi(sp + 1);
+        if (v >= 10 && v <= 60)
+            tint_pct = v;
+    }
+}
+
+static void tint_save(void)
+{
+    char buf[16];
+    int fd = open(HOMEGRID_TINT_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (fd < 0)
+        return;
+    int n = snprintf(buf, sizeof(buf), "%d %d\n", tint_on ? 1 : 0, tint_pct);
+    write(fd, buf, n);
+    close(fd);
+}
+
+/* the wash colour, brightened to full strength; false when there is none
+   (tint off, no pack, or a pack without a colour) */
+static bool tint_params(int *r, int *g, int *b, int *pct)
+{
+    pack_load();
+    tint_load();
+    const struct icon_pack *pk = current_pack();
+    if (!tint_on || !pk || !pk->tint)
+        return false;
+    int tr = (pk->tint >> 16) & 0xff, tg = (pk->tint >> 8) & 0xff,
+        tb = pk->tint & 0xff;
+    int m = tr > tg ? tr : tg;
+    if (tb > m)
+        m = tb;
+    if (m == 0)
+        return false;
+    *r = tr * 255 / m;
+    *g = tg * 255 / m;
+    *b = tb * 255 / m;
+    *pct = tint_pct;
+    return true;
+}
+
+bool homegrid_tint_active(void)
+{
+    int r, g, b, p;
+    return tint_params(&r, &g, &b, &p);
+}
+
+/* dst (w x h) = src (stride in pixels) with the wash: every pixel moves
+   towards the wash colour at its own brightness, so the picture keeps its
+   light and dark and only shifts its hue. */
+void homegrid_tint_pixels(fb_data *dst, const fb_data *src, int w, int h,
+                          int stride)
+{
+    int tr, tg, tb, pct;
+
+    if (!tint_params(&tr, &tg, &tb, &pct))
+    {
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+                dst[y * w + x] = src[y * stride + x];
+        return;
+    }
+    for (int y = 0; y < h; y++)
+    {
+        for (int x = 0; x < w; x++)
+        {
+            fb_data c = src[y * stride + x];
+            int r = FB_UNPACK_RED(c), g = FB_UNPACK_GREEN(c),
+                b = FB_UNPACK_BLUE(c);
+            int l = (r * 30 + g * 59 + b * 11) / 100;
+            r = (r * (100 - pct) + (tr * l / 255) * pct) / 100;
+            g = (g * (100 - pct) + (tg * l / 255) * pct) / 100;
+            b = (b * (100 - pct) + (tb * l / 255) * pct) / 100;
+            dst[y * w + x] = FB_RGBPACK(r, g, b);
+        }
+    }
+}
+
+static const char *tint_get_name(int item, void *data, char *buf, size_t len)
+{
+    (void)data;
+    if (item == 0)
+        snprintf(buf, len, "Tint: %s", tint_on ? "On" : "Off");
+    else
+        snprintf(buf, len, "Strength: %d%%", tint_pct);
+    return buf;
+}
+
+static int tint_action(int action, struct gui_synclist *lists)
+{
+    if (action == ACTION_STD_OK)
+    {
+        if (gui_synclist_get_sel_pos(lists) == 0)
+            tint_on = !tint_on;
+        else
+        {
+            tint_pct += 10;             /* 10, 20 .. 60, then 10 again */
+            if (tint_pct > 60)
+                tint_pct = 10;
+        }
+        tint_save();
+        return ACTION_REDRAW;           /* stay in the list */
+    }
+    return action;
+}
+
+static void tint_menu(void)
+{
+    struct simplelist_info info;
+
+    tint_load();
+    simplelist_info_init(&info, "Tint", 2, NULL);
+    info.get_name = tint_get_name;
+    info.action_callback = tint_action;
+    simplelist_show_list(&info);
+}
+
+/* ---- the Settings page --------------------------------------------------- */
+
+extern const struct menu_item_ex system_menu;
+
+static const char *settings_get_name(int item, void *data, char *buf,
+                                     size_t len)
+{
+    (void)data;
+    switch (item)
+    {
+        case 0: return "Brightness";
+        case 1:
+            snprintf(buf, len, "Theme: %s",
+                     pack_sel > 0 ? homegrid_packs[pack_sel - 1].name
+                                  : "Built-in");
+            return buf;
+        case 2:
+            tint_load();
+            if (tint_on)
+                snprintf(buf, len, "Tint: On, %d%%", tint_pct);
+            else
+                snprintf(buf, len, "Tint: Off");
+            return buf;
+        case 3: return "Sound";
+        case 4: return "Backlight timeout";
+        default: return "System";
+    }
+}
+
+static int settings_action(int action, struct gui_synclist *lists)
+{
+    if (action != ACTION_STD_OK)
+        return action;
+    const struct settings_list *setting;
+    switch (gui_synclist_get_sel_pos(lists))
+    {
+        case 0:
+            setting = find_setting(&global_settings.brightness);
+            if (setting)
+                option_screen(setting, NULL, false, ID2P(LANG_BRIGHTNESS));
+            break;
+        case 1:
+            homegrid_pack_menu();
+            break;
+        case 2:
+            tint_menu();
+            break;
+        case 3:
+            do_menu(&sound_settings, NULL, NULL, false);
+            break;
+        case 4:
+            setting = find_setting(&global_settings.backlight_timeout);
+            if (setting)
+                option_screen(setting, NULL, false, ID2P(LANG_BACKLIGHT));
+            break;
+        default:
+            do_menu(&system_menu, NULL, NULL, false);
+            break;
+    }
+    return ACTION_REDRAW;               /* stay in the list */
+}
+
+static void settings_page(void)
+{
+    struct simplelist_info info;
+
+    pack_load();
+    simplelist_info_init(&info, "Settings", 6, NULL);
+    info.get_name = settings_get_name;
+    info.action_callback = settings_action;
+    simplelist_show_list(&info);
 }
 
 /* ---- colours ----------------------------------------------------------- */
@@ -603,6 +820,16 @@ static void format_elapsed(char *buf, size_t size, unsigned long ms)
         snprintf(buf, size, "%lu:%02lu", s / 60, s % 60);
 }
 
+/* the charging sign: a small lightning bolt, 7x11 pixels */
+static void draw_bolt(struct screen *d, int x, int y)
+{
+    static const unsigned char spans[11][2] = {
+        {3,3},{3,2},{2,3},{2,2},{1,5},{1,5},{3,2},{2,2},{2,2},{1,2},{1,1}
+    };
+    for (int i = 0; i < 11; i++)
+        d->fillrect(x + spans[i][0], y + i, spans[i][1], 1);
+}
+
 static void draw_header(struct screen *d, const struct palette *pal,
                         const char *title, int width, int hh)
 {
@@ -645,6 +872,8 @@ static void draw_header(struct screen *d, const struct palette *pal,
         x -= w;
         put_text(d, x, (hh - h) / 2, buf);
     }
+    if (charging_state())
+        draw_bolt(d, x - 12, (hh - 11) / 2);
 
     d->set_foreground(pal->dim);
     d->hline(0, width - 1, hh - 1);
@@ -727,7 +956,7 @@ static void draw_footer(struct screen *d, const struct palette *pal,
 /* ---- tile actions ------------------------------------------------------ */
 
 /* open the file browser in dir, or in the root if it does not exist */
-static int browse_folder(const char *dir)
+static int home_browse_folder(const char *dir)
 {
     if (!dir_exists(dir))
     {
@@ -760,19 +989,25 @@ static int open_tile(int idx, bool *stay)
         case TILE_AUDIOBOOKS:
             return GO_TO_ROOT; /* handled by homegrid_show() */
         case TILE_MUSIC:
-            return browse_folder("/Music");
+            /* the folder that was open last, like Files in the stock menu;
+               /Music the first time */
+            if (!strcmp(global_status.browse_last_folder, "/"))
+                return home_browse_folder("/Music");
+            return GO_TO_FILEBROWSER;
         case TILE_PODCASTS:
-            return browse_folder("/Podcasts");
+            return home_browse_folder("/Podcasts");
         case TILE_AMBIENCE:
             return GO_TO_ROOT; /* handled by homegrid_show() */
         case TILE_SLEEP:
             sleep_picker();
             *stay = true;
             return GO_TO_ROOT;
+        case TILE_VIDEO:
+            return home_browse_folder("/Video");
         case TILE_SETTINGS:
-            return GO_TO_MAINMENU;
-        case TILE_SHORTCUTS:
-            return GO_TO_SHORTCUTMENU;
+            settings_page();
+            *stay = true;
+            return GO_TO_ROOT;
         case TILE_MODE:
             homegrid_set_active(false);
             return GO_TO_ROOT;
@@ -1272,15 +1507,18 @@ int homegrid_show(void)
                 }
                 break;
             case BUTTON_PLAYPAUSE | BUTTON_REL:
-                /* Play opens the Now Playing screen */
-                if (audio_status() &
-                    (AUDIO_STATUS_PLAY | AUDIO_STATUS_PAUSE))
+                /* Play opens Now Playing; with nothing playing it starts
+                   again the track or book that played last, from where it
+                   stopped (the stock "Resume playback") */
+                if ((audio_status() &
+                     (AUDIO_STATUS_PLAY | AUDIO_STATUS_PAUSE)) ||
+                    global_status.resume_index != -1)
                 {
                     result = GO_TO_WPS;
                     done = true;
                 }
                 else
-                    splash(HZ, "Nothing playing");
+                    splash(HZ, "Nothing to resume");
                 break;
             case BUTTON_NONE:
                 break;

@@ -69,6 +69,7 @@
 #include "skin_engine.h"
 #include "statusbar-skinned.h"
 #include "skin_display.h"
+#include "homegrid.h"
 
 static bool dirty[NB_SCREENS];
 
@@ -805,9 +806,21 @@ void draw_album_art(struct gui_wps *gwps, int handle_id, bool clear)
     if (!clear)
     {
         /* Draw the bitmap */
-        gwps->display->bitmap_part((fb_data*)bmp->data, 0, 0,
-                                    STRIDE(gwps->display->screen_type,
-                                        bmp->width, bmp->height),
+        fb_data *art_pix = (fb_data*)bmp->data;
+        int art_stride = STRIDE(gwps->display->screen_type,
+                                bmp->width, bmp->height);
+#ifdef HAVE_ICON_HOME
+        /* icon pack colour wash (Settings > Tint) */
+        static fb_data tinted[128 * 128];
+        if (gwps->display->screen_type == SCREEN_MAIN &&
+            width <= 128 && height <= 128 && homegrid_tint_active())
+        {
+            homegrid_tint_pixels(tinted, art_pix, width, height, art_stride);
+            art_pix = tinted;
+            art_stride = width;
+        }
+#endif
+        gwps->display->bitmap_part(art_pix, 0, 0, art_stride,
                                    x, y, width, height);
 #ifdef HAVE_LCD_INVERT
         if (global_settings.invert) {

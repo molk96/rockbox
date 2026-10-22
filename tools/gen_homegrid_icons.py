@@ -162,9 +162,17 @@ def icon_settings():
     return g
 
 
-def icon_shortcuts():
+def icon_video():
     g = blank()
-    fill_poly(g, [(12, 0), (3, 11), (9, 11), (7, 20), (17, 8), (11, 8)])
+    for x in range(1, 19):
+        put(g, x, 3)
+        put(g, x, 15)
+    for y in range(3, 16):
+        put(g, 1, y)
+        put(g, 18, y)
+    fill_poly(g, [(7, 6), (13, 9), (7, 12)])
+    for x in range(6, 14):
+        put(g, x, 17)
     return g
 
 
@@ -185,7 +193,7 @@ ICONS = [
     ("ambience", icon_ambience),
     ("sleep", icon_sleep),
     ("settings", icon_settings),
-    ("shortcuts", icon_shortcuts),
+    ("video", icon_video),
     ("mode", icon_mode),
 ]
 
