@@ -4,8 +4,8 @@
  * Lists /Videos with sub folders (series, seasons).  Folders come first,
  * then videos, both sorted A to Z.  Every row has two lines: the title and
  * "length, quality, size" (read from the <name>.txt file that
- * rb_video_convert.py writes next to each <name>.mpg).  The selected row's
- * details are shown in a strip at the bottom.  The top row is "Continue"
+ * rb_video_convert.py writes next to each <name>.mpg) and a small picture
+ * (<name>.thb from the same program, else a drawn icon).  The top row is "Continue"
  * (the video played last) or, inside a folder, "Next up".
  *
  * A video is started in the mpegplayer plugin.  The page tells the plugin
@@ -66,8 +66,6 @@ struct vd_info
     unsigned long len_s;
 };
 
-static struct vd_info vd_det;
-static char vd_det_path[MAX_PATH];
 
 /* the "Continue" / "Next up" row */
 static struct
@@ -262,15 +260,6 @@ static void vd_read_info(const char *vpath, struct vd_info *in)
         }
         line = nl;
     }
-}
-
-/* the details of the selected video (read again only when it changes) */
-static void vd_det_ensure(const char *path)
-{
-    if (!strcmp(vd_det_path, path))
-        return;
-    strlcpy(vd_det_path, path, sizeof(vd_det_path));
-    vd_read_info(path, &vd_det);
 }
 
 /* ---- the folder listing ------------------------------------------------------- */
@@ -564,6 +553,127 @@ static int vd_launch(const struct palette *pal, const char *path,
     return filetype_load_plugin("mpegplayer", path);
 }
 
+/* ---- thumbnails ---------------------------------------------------------------------------
+ * <name>.thb next to the video, made by rb_video_convert.py:
+ *   "THB1", width, height (one byte each, at most VD_TH_W x VD_TH_H), then
+ *   width*height RGB triplets. A few of them are kept in memory. */
+
+#define VD_TH_W     48
+#define VD_TH_H     36
+#define VD_TH_SLOTS 10
+
+struct vd_th_meta
+{
+    unsigned hash;              /* 0 = slot free */
+    unsigned stamp;
+    unsigned char w, h;
+    bool ok;
+};
+
+static int vd_th_handle;
+static struct vd_th_meta vd_th[VD_TH_SLOTS];
+static unsigned vd_th_clock;
+static unsigned char vd_th_raw[VD_TH_W * VD_TH_H * 3];
+
+static void vd_th_free(void)
+{
+    if (vd_th_handle > 0)
+    {
+        core_unpin(vd_th_handle);
+        core_free(vd_th_handle);
+    }
+    vd_th_handle = 0;
+}
+
+static void vd_th_init(void)
+{
+    vd_th_free();
+    memset(vd_th, 0, sizeof(vd_th));
+    vd_th_handle = core_alloc((size_t)VD_TH_SLOTS * VD_TH_W * VD_TH_H *
+                              sizeof(fb_data));
+    if (vd_th_handle > 0)
+        core_pin(vd_th_handle);
+    else
+        vd_th_handle = 0;
+}
+
+/* the picture of a video, or NULL when it has none */
+static const fb_data *vd_th_get(const char *vpath, int *w, int *h)
+{
+    if (vd_th_handle <= 0)
+        return NULL;
+
+    unsigned hash = video_path_hash(vpath);
+    int slot = -1;
+    for (int i = 0; i < VD_TH_SLOTS; i++)
+        if (vd_th[i].hash == hash)
+        {
+            slot = i;
+            break;
+        }
+
+    fb_data *base = (fb_data *)core_get_data(vd_th_handle);
+    if (slot >= 0)
+    {
+        vd_th[slot].stamp = ++vd_th_clock;
+        if (!vd_th[slot].ok)
+            return NULL;
+        *w = vd_th[slot].w;
+        *h = vd_th[slot].h;
+        return base + (size_t)slot * VD_TH_W * VD_TH_H;
+    }
+
+    /* not loaded: take a free slot, else the one used longest ago */
+    slot = 0;
+    for (int i = 0; i < VD_TH_SLOTS; i++)
+    {
+        if (!vd_th[i].hash)
+        {
+            slot = i;
+            break;
+        }
+        if (vd_th[i].stamp < vd_th[slot].stamp)
+            slot = i;
+    }
+    vd_th[slot].hash = hash;
+    vd_th[slot].stamp = ++vd_th_clock;
+    vd_th[slot].ok = false;
+
+    char name[MAX_PATH];
+    strlcpy(name, vpath, sizeof(name));
+    char *dot = strrchr(name, '.');
+    char *slash = strrchr(name, '/');
+    if (dot && (!slash || dot > slash))
+        *dot = '\0';
+    strlcat(name, ".thb", sizeof(name));
+
+    int fd = open(name, O_RDONLY);
+    if (fd < 0)
+        return NULL;
+    unsigned char hd[6];
+    if (read(fd, hd, 6) == 6 && !memcmp(hd, "THB1", 4) &&
+        hd[4] > 0 && hd[4] <= VD_TH_W && hd[5] > 0 && hd[5] <= VD_TH_H)
+    {
+        int n = hd[4] * hd[5];
+        if (read(fd, vd_th_raw, n * 3) == n * 3)
+        {
+            fb_data *pix = base + (size_t)slot * VD_TH_W * VD_TH_H;
+            for (int i = 0; i < n; i++)
+                pix[i] = FB_RGBPACK(vd_th_raw[3 * i], vd_th_raw[3 * i + 1],
+                                    vd_th_raw[3 * i + 2]);
+            vd_th[slot].w = hd[4];
+            vd_th[slot].h = hd[5];
+            vd_th[slot].ok = true;
+        }
+    }
+    close(fd);
+    if (!vd_th[slot].ok)
+        return NULL;
+    *w = vd_th[slot].w;
+    *h = vd_th[slot].h;
+    return base + (size_t)slot * VD_TH_W * VD_TH_H;
+}
+
 /* ---- drawing ------------------------------------------------------------------------------- */
 
 /* small pictures drawn in the row colour, so they follow the pack */
@@ -643,112 +753,6 @@ static void vd_row_text(const struct vd_ent *e, char *l1, size_t n1,
         snprintf(l2, n2, "No info file, %s", b);
 }
 
-/* the detail strip: four lines about the selected row */
-static void vd_draw_strip(struct screen *d, const struct palette *pal,
-                          int width, int y, int h, int fh,
-                          const char *path, const struct vd_ent *e)
-{
-    char line[160], a[24], b[24], right[16];
-    int ty = y + 3;
-
-    d->set_foreground(pal->dim);
-    d->hline(0, width - 1, y);
-
-    if (e && e->dir)
-    {
-        d->set_foreground(pal->fg);
-        snprintf(line, sizeof(line), "%s", e->name);
-        fit_text(d, line, width - 12);
-        put_text(d, 6, ty, line);
-        d->set_foreground(pal->dim);
-        if (e->tried && e->nvid)
-        {
-            snprintf(line, sizeof(line), "%d of %d watched", e->nwatched,
-                     e->nvid);
-            put_text(d, 6, ty + fh, line);
-        }
-        put_text(d, 6, ty + 3 * fh, "Select opens the folder");
-        (void)h;
-        return;
-    }
-
-    const struct video_posrec *r = vd_find(path);
-    vd_det_ensure(path);
-
-    /* line 1: title, and how far you are on the right */
-    right[0] = '\0';
-    if (r && video_rec_watched(r))
-        snprintf(right, sizeof(right), "Watched");
-    else if (r && video_rec_partial(r))
-        snprintf(right, sizeof(right), "%d%%", vd_pct(r->pos_s, r->dur_s));
-    if (vd_det.title[0])
-        snprintf(line, sizeof(line), "%s", vd_det.title);
-    else
-        vd_stem(path, line, sizeof(line));
-    int rw = 0;
-    if (right[0])
-        d->getstringsize(right, &rw, NULL);
-    fit_text(d, line, width - 18 - rw);
-    d->set_foreground(pal->fg);
-    put_text(d, 6, ty, line);
-    if (right[0])
-    {
-        d->set_foreground(pal->accent);
-        put_text(d, width - 6 - rw, ty, right);
-    }
-
-    d->set_foreground(pal->dim);
-    if (vd_det.found)
-    {
-        snprintf(line, sizeof(line), "Source: %s", vd_det.source);
-        fit_text(d, line, width - 12);
-        put_text(d, 6, ty + fh, line);
-
-        if (vd_det.quality[0])
-            snprintf(line, sizeof(line), "%s, %s", vd_det.picture,
-                     vd_det.quality);
-        else
-            snprintf(line, sizeof(line), "%s", vd_det.picture);
-        fit_text(d, line, width - 12);
-        put_text(d, 6, ty + 2 * fh, line);
-
-        snprintf(line, sizeof(line), "Audio: %s, Subs: %s, %s",
-                 vd_det.audio, vd_det.subs, vd_det.conv);
-        fit_text(d, line, width - 12);
-        put_text(d, 6, ty + 3 * fh, line);
-    }
-    else
-    {
-        const char *base = strrchr(path, '/');
-        base = base ? base + 1 : path;
-        long sz = 0;
-        int fd = open(path, O_RDONLY);
-        if (fd >= 0)
-        {
-            sz = lseek(fd, 0, SEEK_END);
-            close(fd);
-        }
-        vd_fmt_size(b, sizeof(b), sz > 0 ? (unsigned long)sz : 0);
-        snprintf(line, sizeof(line), "File: %s, %s", base, b);
-        fit_text(d, line, width - 12);
-        put_text(d, 6, ty + fh, line);
-
-        vd_stem(path, a, sizeof(a));
-        snprintf(line, sizeof(line), "No %s.txt next to it: length unknown", a);
-        fit_text(d, line, width - 12);
-        put_text(d, 6, ty + 2 * fh, line);
-
-        if (r && video_rec_partial(r))
-        {
-            format_elapsed(a, sizeof(a), r->pos_s * 1000ul);
-            snprintf(line, sizeof(line), "Stopped at %s", a);
-        }
-        else
-            snprintf(line, sizeof(line), "Select plays it from the start");
-        put_text(d, 6, ty + 3 * fh, line);
-    }
-}
-
 /* ---- the page ---------------------------------------------------------------------------------- */
 
 /* shows folder dir; select_name is the entry to put the cursor on */
@@ -788,11 +792,11 @@ static bool video_page(struct screen *display, struct viewport *vp,
 {
     struct palette pal;
     int sel = 0, top = 0;
-    bool leave = false, done = false;
+    bool leave = false, done = false, go_home = false;
 
     action_wait_for_release();
+    vd_th_init();
     vd_rec_load();
-    vd_det_path[0] = '\0';
     if (!dir_exists(vd_dir))
         strlcpy(vd_dir, VD_ROOT, sizeof(vd_dir));
     {
@@ -812,10 +816,10 @@ static bool video_page(struct screen *display, struct viewport *vp,
         int width = vp->width, height = vp->height;
         int fh = display->getcharheight();
         int hh = fh + 6;
-        int strip_h = 4 * fh + 8;
-        int sy = height - strip_h;          /* strip top */
         int row_h = 2 * fh + 6;
-        int visible = (sy - hh - 2) / row_h;
+        if (row_h < VD_TH_H + 4)
+            row_h = VD_TH_H + 4;
+        int visible = (height - hh - 2) / row_h;
         if (visible < 1)
             visible = 1;
         bool has_cont = vd_cont.valid;
@@ -910,15 +914,33 @@ static bool video_page(struct screen *display, struct viewport *vp,
 
             unsigned txt = label_color(&pal, is_sel);
             unsigned sub = is_sel ? txt : pal.dim;
-            int icon_y = y + (row_h - 15) / 2;
+            {
+                /* picture slot: thumbnail, else a drawn icon */
+                int sx = 5, sy2 = y + (row_h - VD_TH_H) / 2;
+                int tw = 0, th = 0;
+                const fb_data *tp = (e && e->dir) ? NULL
+                                    : vd_th_get(path, &tw, &th);
+                if (tp)
+                {
+                    int bx = sx + (VD_TH_W - tw) / 2;
+                    int by = sy2 + (VD_TH_H - th) / 2;
+                    display->set_foreground(pal.dim);
+                    display->drawrect(bx - 1, by - 1, tw + 2, th + 2);
+                    display->bitmap(tp, bx, by, tw, th);
+                }
+                else
+                {
+                    display->set_foreground(is_sel ? txt : pal.accent);
+                    if (e && e->dir)
+                        vd_draw_folder_icon(display, sx + (VD_TH_W - 17) / 2,
+                                            sy2 + (VD_TH_H - 14) / 2);
+                    else
+                        vd_draw_video_icon(display, sx + (VD_TH_W - 17) / 2,
+                                           sy2 + (VD_TH_H - 14) / 2);
+                }
+            }
 
-            display->set_foreground(is_sel ? txt : pal.accent);
-            if (e && e->dir)
-                vd_draw_folder_icon(display, 5, icon_y);
-            else
-                vd_draw_video_icon(display, 5, icon_y);
-
-            int tx = 28;
+            int tx = 5 + VD_TH_W + 8;
             int right_w = 36;               /* room for marker */
 
             if (is_cont)
@@ -1016,14 +1038,6 @@ static bool video_page(struct screen *display, struct viewport *vp,
             display->fillrect(width - 3, by, 2, bar);
         }
 
-        if (sel_path)
-            vd_draw_strip(display, &pal, width, sy, strip_h, fh, sel_path,
-                          sel_ent);
-        else
-        {
-            display->set_foreground(pal.dim);
-            display->hline(0, width - 1, sy);
-        }
         display->update();
 
         long button = button_get_w_tmo(HZ / 6);
@@ -1083,8 +1097,20 @@ static bool video_page(struct screen *display, struct viewport *vp,
                 }
 
                 splash(0, ID2P(LANG_WAIT));
+                vd_th_free();       /* the player wants the memory */
                 int ret = vd_launch(&pal, path, start);
+                vd_th_init();
                 display->set_viewport(vp);
+                /* Back is held on after the video stopped: go straight on
+                   to the icon grid instead of showing this list */
+                {
+                    long t0 = current_tick;
+                    while ((button_status() & BUTTON_BACK) &&
+                           TIME_BEFORE(current_tick, t0 + HZ * 3 / 4))
+                        sleep(HZ / 20);
+                    if (button_status() & BUTTON_BACK)
+                        go_home = true;
+                }
                 action_wait_for_release();
                 if (ret == PLUGIN_USB_CONNECTED)
                 {
@@ -1095,11 +1121,12 @@ static bool video_page(struct screen *display, struct viewport *vp,
                 }
                 /* the plugin has saved where it stopped */
                 vd_rec_load();
-                vd_det_path[0] = '\0';
                 for (int i = 0; i < vd_cur.n; i++)
                     if (vd_cur.ent[i].dir)
                         vd_cur.ent[i].tried = false;
                 vd_cont_compute();
+                if (go_home)
+                    done = true;
                 break;
             }
             case BUTTON_BACK | BUTTON_REL:
@@ -1145,5 +1172,6 @@ static bool video_page(struct screen *display, struct viewport *vp,
         }
     }
 
+    vd_th_free();
     return leave;
 }

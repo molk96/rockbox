@@ -409,9 +409,6 @@ CONFIG_KEYPAD == SANSA_M200_PAD
 #define MPEG_VOLUP      BUTTON_UP
 #define MPEG_RW         BUTTON_LEFT
 #define MPEG_FF         BUTTON_RIGHT
-#ifdef CREATIVE_ZENXFI
-#define MPEG_PAUSE2     BUTTON_SELECT   /* Select pauses and resumes too */
-#endif
 
 #elif CONFIG_KEYPAD == DX50_PAD
 #define MPEG_MENU       BUTTON_POWER
@@ -1982,10 +1979,31 @@ static const char *vp_path;             /* the video that plays now */
 static unsigned int vp_stamp;
 static bool vp_ended;                   /* played to the end */
 static bool vp_stop_saved;
+static bool vp_sel_long;                /* the next Select release is not a tap */
 static long vp_next_save;
 static struct video_posrec vp_recs[VIDEO_POS_MAX];
 
 #define VP_ON() (vp_active)
+
+/* brightness of a colour, 0..255 */
+static int vp_lum(unsigned c)
+{
+    return (RGB_UNPACK_RED(c) * 3 + RGB_UNPACK_GREEN(c) * 6 +
+            RGB_UNPACK_BLUE(c)) / 10;
+}
+
+/* the bottom bar in the colours of the chosen icon pack */
+static void vp_style_osd(void)
+{
+    int d;
+
+    if (!vp_active)
+        return;
+    osd.bgcolor = vp_col[4];
+    osd.fgcolor = vp_col[5];
+    d = vp_lum(vp_col[2]) - vp_lum(vp_col[4]);
+    osd.prog_fillcolor = (d > 70 || d < -70) ? vp_col[2] : vp_col[5];
+}
 
 static unsigned long vp_hex(const char **sp)
 {
@@ -2154,6 +2172,7 @@ static void vp_save_stop(bool ended, uint32_t resume_time)
 }
 #else
 #define VP_ON() (false)
+static inline void vp_style_osd(void) { }
 #endif /* VIDEO_PAGE */
 
 /* Stop playback - remember the resume point if not closed */
@@ -2404,6 +2423,9 @@ static bool vp_next_countdown(char *videofile, size_t size)
             case BUTTON_NONE:
                 break;
             case BUTTON_SELECT:
+                vp_sel_long = true;     /* its release must not pause the next one */
+                play = true;
+                break;
             case BUTTON_PLAYPAUSE:
                 play = true;
                 break;
@@ -2556,6 +2578,7 @@ static int button_loop(void)
 #endif
 
     osd_init();
+    vp_style_osd();
 
     /* Start playback at the specified starting time */
     if (osd_play(settings.resume_time) < STREAM_OK) {
@@ -2695,6 +2718,36 @@ static int button_loop(void)
             osd_stop();
             break;
             } /* MPEG_STOP: */
+
+#ifdef VIDEO_PAGE
+        case BUTTON_SELECT | BUTTON_REPEAT:
+            /* hold Select: show or hide the bottom bar */
+            if (!vp_sel_long) {
+                vp_sel_long = true;
+                if (osd.flags & OSD_SHOW)
+                    osd_show(OSD_HIDE);
+                else {
+                    osd_show(OSD_SHOW);
+                    osd_refresh(OSD_REFRESH_DEFAULT);
+                }
+            }
+            break;
+
+        case BUTTON_SELECT | BUTTON_REL:
+            if (vp_sel_long) {
+                vp_sel_long = false;    /* it was a hold, not a tap */
+                break;
+            }
+            /* tap Select: pause / resume */
+            {
+                int st = osd_stream_status();
+                if (st == STREAM_PLAYING)
+                    osd_pause();
+                else if (st == STREAM_PAUSED)
+                    osd_resume();
+            }
+            break;
+#endif
 
         case MPEG_PAUSE:
 #ifdef MPEG_PAUSE2
