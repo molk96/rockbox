@@ -670,6 +670,19 @@ static fb_data* get_framebuffer(void)
 
 static void osd_show(unsigned show);
 
+#ifdef VIDEO_PAGE
+/* top bar (title, battery, clock) shown together with the bottom bar */
+static void vp_top_refresh(void);
+static void vp_top_hide(void);
+static void vp_top_show(void);
+static int vp_top_h(void);
+#else
+#define vp_top_refresh()
+#define vp_top_hide()
+#define vp_top_show()
+#define vp_top_h() 0
+#endif
+
 #ifdef LCD_LANDSCAPE
     #define __X (x + osd.x)
     #define __Y (y + osd.y)
@@ -1599,6 +1612,8 @@ static void osd_refresh(int hint)
         osd.hide_tick = tick + osd.show_for;
     }
 
+    vp_top_refresh();   /* the OSD is visible here */
+
     if (TIME_AFTER(tick, osd.next_auto_refresh)) {
         /* Refresh whatever graphical elements are due automatically */
         osd.next_auto_refresh = tick + OSD_MIN_UPDATE_INTERVAL;
@@ -1674,9 +1689,10 @@ static void osd_show(unsigned show)
 
     if (show & OSD_SHOW) {
         /* Clip away the part of video that is covered */
-        struct vo_rect rc = { 0, 0, SCREEN_WIDTH, osd.y };
+        struct vo_rect rc = { 0, vp_top_h(), SCREEN_WIDTH, osd.y };
 
         osd.flags |= OSD_SHOW;
+        vp_top_show();
 
         if (osd.status != OSD_STATUS_PLAYING) {
             /* Not playing - set brightness to mpegplayer setting */
@@ -1692,6 +1708,7 @@ static void osd_show(unsigned show)
         osd.flags &= ~OSD_SHOW;
 
         draw_clear_area(0, 0, osd.width, osd.height);
+        vp_top_hide();
 
         if (!(show & OSD_NODRAW)) {
             vo_lock();
@@ -1979,6 +1996,9 @@ static const char *vp_path;             /* the video that plays now */
 static unsigned int vp_stamp;
 static bool vp_ended;                   /* played to the end */
 static bool vp_stop_saved;
+static int vp_top_height;               /* 0 until vp_style_osd() ran */
+static bool vp_top_dirty;
+static int vp_top_stamp = -1, vp_top_batt = -2;
 static bool vp_sel_long;                /* the next Select release is not a tap */
 static long vp_next_save;
 static struct video_posrec vp_recs[VIDEO_POS_MAX];
@@ -2003,6 +2023,110 @@ static void vp_style_osd(void)
     osd.fgcolor = vp_col[5];
     d = vp_lum(vp_col[2]) - vp_lum(vp_col[4]);
     osd.prog_fillcolor = (d > 70 || d < -70) ? vp_col[2] : vp_col[5];
+
+    /* height of the top bar */
+    {
+        int h = 0;
+        draw_setfont(FONT_UI);
+        mylcd_getstringsize("Ag", NULL, &h);
+        draw_setfont(FONT_SYSFIXED);
+        vp_top_height = h + 6;
+    }
+}
+
+/* ---- top bar: title on the left, battery and clock on the right ---- */
+
+static int vp_top_h(void)
+{
+    return vp_active ? vp_top_height : 0;
+}
+
+static void vp_top_show(void)
+{
+    vp_top_dirty = true;
+}
+
+/* only draws when something changed: first time, minute or battery */
+static void vp_top_refresh(void)
+{
+    struct tm *tm;
+    int batt, h, rw, avail, len, tw, ty;
+    int stamp;
+    char right[24], title[96];
+    const char *base, *dot;
+    unsigned oldfg, oldbg;
+
+    if (!vp_active || !vp_top_height)
+        return;
+
+    tm = rb->get_time();
+    batt = rb->battery_level();
+    stamp = tm->tm_hour * 60 + tm->tm_min;
+    if (!vp_top_dirty && stamp == vp_top_stamp && batt == vp_top_batt)
+        return;
+    vp_top_dirty = false;
+    vp_top_stamp = stamp;
+    vp_top_batt = batt;
+
+    oldfg = mylcd_get_foreground();
+    oldbg = mylcd_get_background();
+    draw_setfont(FONT_UI);
+
+    /* bar and a darker line under it */
+    mylcd_set_foreground(osd.bgcolor);
+    mylcd_fillrect(0, 0, SCREEN_WIDTH, vp_top_height);
+    mylcd_set_foreground(draw_blendcolor(osd.bgcolor, MYLCD_BLACK, 128));
+    mylcd_hline(0, SCREEN_WIDTH - 1, vp_top_height - 1);
+    mylcd_set_foreground(osd.fgcolor);
+    mylcd_set_drawmode(DRMODE_FG);
+
+    if (batt >= 0)
+        rb->snprintf(right, sizeof(right), "%d%%  %02d:%02d", batt,
+                     tm->tm_hour, tm->tm_min);
+    else
+        rb->snprintf(right, sizeof(right), "%02d:%02d", tm->tm_hour,
+                     tm->tm_min);
+    mylcd_getstringsize(right, &rw, &h);
+    ty = (vp_top_height - 1 - h) / 2;
+    mylcd_putsxy(SCREEN_WIDTH - 6 - rw, ty, right);
+
+    /* file name without folder and extension, cut to fit */
+    base = vp_path ? rb->strrchr(vp_path, '/') : NULL;
+    base = base ? base + 1 : (vp_path ? vp_path : "");
+    rb->strlcpy(title, base, sizeof(title));
+    dot = rb->strrchr(title, '.');
+    if (dot && dot != title)
+        title[dot - title] = '\0';
+    avail = SCREEN_WIDTH - 6 - rw - 16;
+    len = rb->strlen(title);
+    mylcd_getstringsize(title, &tw, NULL);
+    while (len > 2 && tw > avail) {
+        title[--len] = '\0';
+        mylcd_getstringsize(title, &tw, NULL);
+    }
+    mylcd_putsxy(6, ty, title);
+
+    mylcd_set_drawmode(DRMODE_SOLID);
+    draw_setfont(FONT_SYSFIXED);
+    mylcd_set_foreground(oldfg);
+    mylcd_set_background(oldbg);
+
+    vo_lock();
+    mylcd_update_rect(0, 0, SCREEN_WIDTH, vp_top_height);
+    vo_unlock();
+}
+
+/* the bar goes away: clear its area (the video is drawn again after this) */
+static void vp_top_hide(void)
+{
+    if (!vp_active || !vp_top_height)
+        return;
+    rb->screen_clear_area(rb->screens[SCREEN_MAIN], 0, 0, SCREEN_WIDTH,
+                          vp_top_height);
+    vo_lock();
+    mylcd_update_rect(0, 0, SCREEN_WIDTH, vp_top_height);
+    vo_unlock();
+    vp_top_dirty = true;
 }
 
 static unsigned long vp_hex(const char **sp)
