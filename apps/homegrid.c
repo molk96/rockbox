@@ -65,6 +65,7 @@
 #include "menus/exported_menus.h"
 #include "playlist.h"
 #include "filetypes.h"
+#include "plugin.h"
 #include "strnatcmp.h"
 #include "recorder/bmp.h"
 #ifdef HAVE_JPEG
@@ -1003,7 +1004,7 @@ static int open_tile(int idx, bool *stay)
             *stay = true;
             return GO_TO_ROOT;
         case TILE_VIDEO:
-            return home_browse_folder("/Videos");
+            return GO_TO_ROOT; /* handled by homegrid_show() */
         case TILE_SETTINGS:
             settings_page();
             *stay = true;
@@ -1387,6 +1388,7 @@ static bool ambience_page(struct screen *display, struct viewport *vp,
 }
 
 #include "homegrid_books.h"
+#include "homegrid_video.h"
 
 /* ---- the screen -------------------------------------------------------- */
 
@@ -1473,11 +1475,14 @@ int homegrid_show(void)
             {
                 bool stay = false;
                 if (selected_tile == TILE_AMBIENCE ||
-                    selected_tile == TILE_AUDIOBOOKS)
+                    selected_tile == TILE_AUDIOBOOKS ||
+                    selected_tile == TILE_VIDEO)
                 {
                     bool leave_home;
                     if (selected_tile == TILE_AMBIENCE)
                         leave_home = ambience_page(display, &vp, &result);
+                    else if (selected_tile == TILE_VIDEO)
+                        leave_home = video_page(display, &vp, &result);
                     else
                         leave_home = books_page(display, &vp, &result);
                     if (leave_home)

@@ -106,6 +106,17 @@
 #include "stream_thread.h"
 #include "stream_mgr.h"
 
+/* Creative Zen X-Fi: started from the icon home's Video page.  The page
+ * leaves /.rockbox/video_launch.txt (start position, the files that follow,
+ * its colours); this plugin then skips its start menu, keeps the position of
+ * each video in /.rockbox/video_pos.bin, seeks 10 s back / 30 s forward on a
+ * tap of Left / Right and starts the next file of a series after a short
+ * countdown. */
+#if defined(CREATIVE_ZENXFI) && (CONFIG_KEYPAD == CREATIVE_ZEN_PAD)
+#define VIDEO_PAGE
+#include "../../video_pos.h"
+#endif
+
 
 /* button definitions */
 #if (CONFIG_KEYPAD == IRIVER_H100_PAD) || (CONFIG_KEYPAD == IRIVER_H300_PAD)
@@ -398,6 +409,9 @@ CONFIG_KEYPAD == SANSA_M200_PAD
 #define MPEG_VOLUP      BUTTON_UP
 #define MPEG_RW         BUTTON_LEFT
 #define MPEG_FF         BUTTON_RIGHT
+#ifdef CREATIVE_ZENXFI
+#define MPEG_PAUSE2     BUTTON_SELECT   /* Select pauses and resumes too */
+#endif
 
 #elif CONFIG_KEYPAD == DX50_PAD
 #define MPEG_MENU       BUTTON_POWER
@@ -1956,10 +1970,200 @@ static void osd_resume(void)
     stream_resume();
 }
 
+#ifdef VIDEO_PAGE
+static bool vp_active;                  /* started by the Video page */
+static bool vp_series;                  /* go on with the next file */
+static unsigned long vp_start_s;
+static unsigned vp_col[6];              /* fg bg accent sel_bg hdr1 hdr_fg */
+static char vp_buf[4096];               /* the launch file */
+static const char *vp_next[VIDEO_NEXT_MAX];
+static int vp_nnext, vp_inext;
+static const char *vp_path;             /* the video that plays now */
+static unsigned int vp_stamp;
+static bool vp_ended;                   /* played to the end */
+static bool vp_stop_saved;
+static long vp_next_save;
+static struct video_posrec vp_recs[VIDEO_POS_MAX];
+
+#define VP_ON() (vp_active)
+
+static unsigned long vp_hex(const char **sp)
+{
+    const char *s = *sp;
+    unsigned long v = 0;
+    int k;
+
+    while (*s == ' ')
+        s++;
+    for (k = 0; k < 6; k++)
+    {
+        char c = s[k];
+        if (c >= '0' && c <= '9')
+            v = v * 16 + (c - '0');
+        else if (c >= 'a' && c <= 'f')
+            v = v * 16 + (c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F')
+            v = v * 16 + (c - 'A' + 10);
+        else
+            break;
+    }
+    *sp = s + k;
+    return v;
+}
+
+/* reads (and removes) the launch file; only valid for the file named in it */
+static void vp_read_launch(const char *param)
+{
+    char *lines[5 + VIDEO_NEXT_MAX];
+    int nl = 0, n;
+    char *p;
+
+    vp_active = false;
+    vp_series = false;
+    vp_nnext = vp_inext = 0;
+    vp_start_s = 0;
+
+    int fd = rb->open(VIDEO_LAUNCH_FILE, O_RDONLY);
+    if (fd < 0)
+        return;
+    n = rb->read(fd, vp_buf, sizeof(vp_buf) - 1);
+    rb->close(fd);
+    rb->remove(VIDEO_LAUNCH_FILE);      /* a later start from the browser
+                                           must not use it */
+    if (n <= 0)
+        return;
+    vp_buf[n] = '\0';
+
+    p = vp_buf;
+    while (*p && nl < 4 + VIDEO_NEXT_MAX)
+    {
+        char *e = rb->strchr(p, '\n');
+        lines[nl++] = p;
+        if (!e)
+            break;
+        *e = '\0';
+        if (e > p && e[-1] == '\r')
+            e[-1] = '\0';
+        p = e + 1;
+    }
+    if (nl < 4 || rb->strcmp(lines[0], param))
+        return;
+
+    vp_start_s = rb->atoi(lines[1]);
+    vp_series = rb->atoi(lines[2]) != 0;
+    {
+        const char *c = lines[3];
+        for (int i = 0; i < 6; i++)
+        {
+            unsigned long v = vp_hex(&c);
+            vp_col[i] = LCD_RGBPACK((v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff);
+        }
+    }
+    for (int i = 4; i < nl && vp_nnext < VIDEO_NEXT_MAX; i++)
+        if (lines[i][0])
+            vp_next[vp_nnext++] = lines[i];
+    vp_active = true;
+}
+
+/* a new file is about to be opened */
+static void vp_file_start(const char *path)
+{
+    vp_path = path;
+    vp_stamp = 0;
+    vp_ended = false;
+    vp_stop_saved = false;
+    vp_next_save = *rb->current_tick + 30 * HZ;
+    if (vp_active)
+    {
+        int fd = rb->open(VIDEO_LAST_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        if (fd >= 0)
+        {
+            rb->write(fd, path, rb->strlen(path));
+            rb->write(fd, "\n", 1);
+            rb->close(fd);
+        }
+    }
+}
+
+/* Start position of the file that is about to play.  true = the Video page
+ * decided it, so the plugin's own start menu is skipped. */
+static bool vp_launch_start(void)
+{
+    if (!vp_active)
+        return false;
+    settings.resume_time = vp_start_s * TS_SECOND;
+    return true;
+}
+
+/* updates the record of the playing video in place (16 bytes) */
+static void vp_save(unsigned long pos_s, unsigned long dur_s)
+{
+    struct video_posrec rec;
+    int n, idx = -1, oldest = 0;
+    unsigned int h = video_path_hash(vp_path), maxst = 0, minst = ~0u;
+
+    int fd = rb->open(VIDEO_POS_FILE, O_RDWR | O_CREAT, 0666);
+    if (fd < 0)
+        return;
+    n = rb->read(fd, vp_recs, sizeof(vp_recs));
+    n = n > 0 ? n / (int)sizeof(rec) : 0;
+    for (int i = 0; i < n; i++)
+    {
+        if (vp_recs[i].hash == h)
+            idx = i;
+        if (vp_recs[i].stamp > maxst)
+            maxst = vp_recs[i].stamp;
+        if (vp_recs[i].stamp < minst)
+        {
+            minst = vp_recs[i].stamp;
+            oldest = i;
+        }
+    }
+    if (!vp_stamp)
+        vp_stamp = maxst + 1;       /* the newest one from now on */
+    if (idx < 0)
+        idx = n < VIDEO_POS_MAX ? n : oldest;
+    rec.hash = h;
+    rec.pos_s = pos_s;
+    rec.dur_s = dur_s;
+    rec.stamp = vp_stamp;
+    rb->lseek(fd, idx * (int)sizeof(rec), SEEK_SET);
+    rb->write(fd, &rec, sizeof(rec));
+    rb->close(fd);
+}
+
+/* playback stopped: by the user (resume_time = where) or at the end */
+static void vp_save_stop(bool ended, uint32_t resume_time)
+{
+    unsigned long dur, pos;
+
+    if (!vp_active || vp_stop_saved)
+        return;                     /* the loop stops once more at its end */
+    vp_stop_saved = true;
+    vp_ended = ended;
+    dur = stream_get_duration() / TS_SECOND;
+    if (ended)
+        pos = dur;
+    else if (resume_time != INVALID_TIMESTAMP)
+        pos = resume_time / TS_SECOND;
+    else
+        pos = settings.resume_time / TS_SECOND;
+    if (dur && pos > dur)
+        pos = dur;
+    vp_save(pos, dur);
+}
+#else
+#define VP_ON() (false)
+#endif /* VIDEO_PAGE */
+
 /* Stop playback - remember the resume point if not closed */
 static void osd_stop(void)
 {
     uint32_t resume_time;
+#ifdef VIDEO_PAGE
+    /* already stopped when we get here = the video ran to its end */
+    bool ended = (stream_status() == STREAM_STOPPED);
+#endif
 
     osd_set_hp_pause_flag(false);
     osd_cancel_refresh(OSD_REFRESH_VIDEO | OSD_REFRESH_RESUME);
@@ -1972,6 +2176,10 @@ static void osd_stop(void)
 
     if (resume_time != INVALID_TIMESTAMP)
         settings.resume_time = resume_time;
+
+#ifdef VIDEO_PAGE
+    vp_save_stop(ended, resume_time);
+#endif
 
     osdbacklight_hw_on_video_mode(false);
     osd_backlight_brightness_video_mode(false);
@@ -2053,6 +2261,193 @@ static void osd_seek_time(uint32_t time)
     osd_refresh(OSD_REFRESH_TIME);
     osd_schedule_refresh(refresh);
 }
+
+#ifdef VIDEO_PAGE
+/* seek by delta_s seconds (a tap of Left / Right) */
+static void vp_seek_by(int delta_s)
+{
+    uint32_t dur = stream_get_duration();
+    uint32_t t, step = (uint32_t)(delta_s < 0 ? -delta_s : delta_s) * TS_SECOND;
+
+    osd_update_time();
+    if (delta_s < 0)
+        t = osd.curr_time > step ? osd.curr_time - step : 0;
+    else
+    {
+        t = osd.curr_time + step;
+        if (dur > 3 * TS_SECOND && t > dur - 3 * TS_SECOND)
+            t = dur - 3 * TS_SECOND;
+    }
+    osd_seek_time(t);
+}
+
+/* every 30 s while playing: keep the position, so a flat battery or a
+   reset does not lose it */
+static void vp_periodic(void)
+{
+    if (!vp_active || !TIME_AFTER(*rb->current_tick, vp_next_save))
+        return;
+    vp_next_save = *rb->current_tick + 30 * HZ;
+    if (osd_stream_status() != STREAM_PLAYING)
+        return;
+    osd_update_time();
+    vp_save(osd.curr_time / TS_SECOND, stream_get_duration() / TS_SECOND);
+}
+
+static void vp_fit(char *text, int maxw)
+{
+    int w, len = rb->strlen(text);
+    rb->lcd_getstringsize(text, &w, NULL);
+    while (len > 1 && w > maxw)
+    {
+        text[--len] = '\0';
+        rb->lcd_getstringsize(text, &w, NULL);
+    }
+}
+
+static void vp_text(int x, int y, const char *s)
+{
+    rb->lcd_set_drawmode(DRMODE_FG);
+    rb->lcd_putsxy(x, y, s);
+    rb->lcd_set_drawmode(DRMODE_SOLID);
+}
+
+#define VP_COUNTDOWN 8      /* seconds */
+
+/* The video ran to its end and another one follows in the folder: show it
+ * for a few seconds.  Select / Play = now, Back = stop (the page is next).
+ * Returns true when the next file should play (videofile is changed). */
+static bool vp_next_countdown(char *videofile, size_t size)
+{
+    char title[MAX_PATH], line[64];
+    const char *next, *base;
+    long end;
+    int fh, w, x, y, pw = 240, ph, secs = -1;
+    bool play = false, stop = false;
+
+    if (vp_inext >= vp_nnext)
+        return false;
+    next = vp_next[vp_inext];
+    base = rb->strrchr(next, '/');
+    base = base ? base + 1 : next;
+    rb->strlcpy(title, base, sizeof(title));
+    {
+        char *dot = rb->strrchr(title, '.');
+        if (dot && dot != title)
+            *dot = '\0';
+    }
+
+#if defined(HAVE_LCD_MODES) && (HAVE_LCD_MODES & LCD_MODE_YUV)
+    rb->lcd_set_mode(LCD_MODE_RGB565);
+#endif
+    rb->lcd_setfont(FONT_UI);
+    rb->lcd_getstringsize("Ag", &w, &fh);
+    ph = 5 * fh + 34;
+    x = (LCD_WIDTH - pw) / 2;
+    y = (LCD_HEIGHT - ph) / 2;
+    rb->button_clear_queue();
+    end = *rb->current_tick + VP_COUNTDOWN * HZ;
+
+    while (!play && !stop && TIME_BEFORE(*rb->current_tick, end))
+    {
+        int left = (end - *rb->current_tick + HZ - 1) / HZ;
+        int button;
+
+        if (left != secs)
+        {
+            secs = left;
+            rb->lcd_set_foreground(LCD_BLACK);
+            rb->lcd_set_background(LCD_BLACK);
+            rb->lcd_clear_display();
+            /* panel */
+            rb->lcd_set_foreground(vp_col[1]);
+            rb->lcd_fillrect(x, y, pw, ph);
+            rb->lcd_set_foreground(vp_col[2]);
+            rb->lcd_drawrect(x, y, pw, ph);
+            rb->lcd_set_foreground(vp_col[4]);
+            rb->lcd_fillrect(x + 1, y + 1, pw - 2, fh + 4);
+            rb->lcd_set_foreground(vp_col[5]);
+            vp_text(x + 6, y + 3, "Finished");
+
+            rb->lcd_set_foreground(vp_col[2]);
+            vp_text(x + 8, y + fh + 10, "Next episode");
+            rb->strlcpy(line, title, sizeof(line));
+            vp_fit(line, pw - 16);
+            rb->lcd_set_foreground(vp_col[0]);
+            vp_text(x + 8, y + 2 * fh + 12, line);
+            rb->snprintf(line, sizeof(line), "Starts in %d s", secs);
+            rb->lcd_set_foreground(vp_col[2]);
+            vp_text(x + 8, y + 3 * fh + 14, line);
+            /* countdown bar */
+            rb->lcd_set_foreground(vp_col[2]);
+            rb->lcd_drawrect(x + 8, y + 4 * fh + 17, pw - 16, 5);
+            rb->lcd_fillrect(x + 9, y + 4 * fh + 18,
+                             (pw - 18) * secs / VP_COUNTDOWN, 3);
+            /* the two buttons */
+            {
+                int by = y + 5 * fh + 24, bh = fh + 6, bw = (pw - 24) / 2;
+                rb->lcd_set_foreground(vp_col[3]);
+                rb->lcd_fillrect(x + 8, by - 4, bw, bh - 4);
+                rb->lcd_set_foreground(vp_col[2]);
+                rb->lcd_drawrect(x + 8, by - 4, bw, bh - 4);
+                rb->lcd_drawrect(x + 16 + bw, by - 4, bw, bh - 4);
+                rb->lcd_set_foreground(vp_col[0]);
+                vp_text(x + 12, by - 2, "Select: Play now");
+                vp_text(x + 20 + bw, by - 2, "Back: List");
+            }
+            rb->lcd_update();
+        }
+
+        button = rb->button_get_w_tmo(HZ / 4);
+        switch (button)
+        {
+            case BUTTON_NONE:
+                break;
+            case BUTTON_SELECT:
+            case BUTTON_PLAYPAUSE:
+                play = true;
+                break;
+            case BUTTON_BACK:
+                stop = true;
+                break;
+            default:
+                if (rb->default_event_handler(button) == SYS_USB_CONNECTED)
+                    stop = true;
+                break;
+        }
+    }
+    if (stop)
+        return false;
+    rb->strlcpy(videofile, next, size);
+    vp_inext++;
+    vp_start_s = 0;
+    return true;
+}
+
+/* After a file: the Video page is where we go next, except that a series
+ * goes on by itself.  Returns true when it took over the decision. */
+static bool vp_finish(char *videofile, size_t size, bool *quit)
+{
+    if (!vp_active)
+        return false;
+    if (vp_ended && vp_series && vp_next_countdown(videofile, size))
+        *quit = false;
+    else
+        *quit = true;
+    return true;
+}
+#else
+static inline void vp_seek_by(int delta_s) { (void)delta_s; }
+static inline void vp_periodic(void) { }
+static inline void vp_read_launch(const char *param) { (void)param; }
+static inline void vp_file_start(const char *path) { (void)path; }
+static inline bool vp_launch_start(void) { return false; }
+static inline bool vp_finish(char *f, size_t n, bool *q)
+{
+    (void)f; (void)n; (void)q;
+    return false;
+}
+#endif /* VIDEO_PAGE */
 
 /* Has this file one of the supported extensions? */
 static bool is_videofile(const char* file)
@@ -2177,6 +2572,7 @@ static int button_loop(void)
         {
         case BUTTON_NONE:
         {
+            vp_periodic();
             osd_refresh(OSD_REFRESH_DEFAULT);
             continue;
             } /* BUTTON_NONE: */
@@ -2335,7 +2731,10 @@ static int button_loop(void)
             /* If button has been released: skip to next/previous file */
             button = mpeg_button_get(OSD_MIN_UPDATE_INTERVAL);
 
-            if ((old_button | BUTTON_REL) == button) {
+            if ((old_button | BUTTON_REL) == button && VP_ON()) {
+                vp_seek_by(-10);    /* a tap: 10 s back */
+            }
+            else if ((old_button | BUTTON_REL) == button) {
                 /* Check current playback position */
                 osd_update_time();
 
@@ -2371,10 +2770,13 @@ static int button_loop(void)
         {
             int old_button = button;
 
-            if (settings.play_mode != 0)
+            if (settings.play_mode != 0 || VP_ON())
                 button = mpeg_button_get(OSD_MIN_UPDATE_INTERVAL);
 
-            if ((old_button | BUTTON_REL) == button) {
+            if ((old_button | BUTTON_REL) == button && VP_ON()) {
+                vp_seek_by(30);     /* a tap: 30 s forward */
+            }
+            else if ((old_button | BUTTON_REL) == button) {
                 /* If button has been released: skip to next file */
                 osd_stop();
                 next_action = VIDEO_NEXT | VIDEO_ACTION_MANUAL;
@@ -2445,6 +2847,7 @@ enum plugin_status plugin_start(const void* parameter)
     rb->lcd_update();
 
     rb->strcpy(videofile, (const char*) parameter);
+    vp_read_launch(videofile);
 
     if (stream_init() < STREAM_OK) {
         /* Fatal because this should not fail */
@@ -2461,11 +2864,16 @@ enum plugin_status plugin_start(const void* parameter)
             int result = stream_open(videofile);
             bool manual_skip = false;
 
+            vp_file_start(videofile);
+
             if (result >= STREAM_OK) {
                 /* start menu */
                 rb->lcd_clear_display();
                 rb->lcd_update();
-                result = mpeg_start_menu(stream_get_duration());
+                if (vp_launch_start())
+                    result = MPEG_START_SEEK;   /* the Video page decided */
+                else
+                    result = mpeg_start_menu(stream_get_duration());
 
                 next_action = VIDEO_STOP;
                 if (result != MPEG_START_QUIT) {
@@ -2537,6 +2945,11 @@ enum plugin_status plugin_start(const void* parameter)
                     } /* switch */
                 } /* while */
             }
+
+            /* started from the Video page: back to it, or on to the next
+               file of a series */
+            if (vp_finish(videofile, sizeof(videofile), &quit))
+                continue;
 
             /* return value of button_loop says, what's next */
             switch (next_action)
