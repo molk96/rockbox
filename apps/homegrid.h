@@ -18,7 +18,7 @@
 
 #include "config.h"
 
-#if defined(CREATIVE_ZENXFI) && !defined(BOOTLOADER) && defined(HAVE_LCD_COLOR)
+#if (defined(CREATIVE_ZENXFI) || defined(CREATIVE_ZEN)) && !defined(BOOTLOADER) && defined(HAVE_LCD_COLOR)
 #define HAVE_ICON_HOME
 #endif
 

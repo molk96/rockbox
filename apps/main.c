@@ -72,7 +72,7 @@
 #include "splash.h"
 #include "eeprom_settings.h"
 #include "icon.h"
-#if defined(CREATIVE_ZENXFI)
+#if defined(CREATIVE_ZENXFI) || defined(CREATIVE_ZEN)
 #include "bitmaps/zenxfisplash.h" /* custom full-screen boot splash */
 #define HAVE_ZENXFI_SPLASH
 #endif

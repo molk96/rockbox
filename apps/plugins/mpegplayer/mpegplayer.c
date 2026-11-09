@@ -112,7 +112,7 @@
  * each video in /.rockbox/video_pos.bin, seeks 10 s back / 30 s forward on a
  * tap of Left / Right and starts the next file of a series after a short
  * countdown. */
-#if defined(CREATIVE_ZENXFI) && (CONFIG_KEYPAD == CREATIVE_ZEN_PAD)
+#if (defined(CREATIVE_ZENXFI) || defined(CREATIVE_ZEN)) && (CONFIG_KEYPAD == CREATIVE_ZEN_PAD)
 #define VIDEO_PAGE
 #include "../../video_pos.h"
 #endif

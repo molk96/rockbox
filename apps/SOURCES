@@ -32,7 +32,7 @@ buffering.c
 voice_thread.c
 ambient.c
 ambient_mp4.c
-#ifdef CREATIVE_ZENXFI
+#if defined(CREATIVE_ZENXFI) || defined(CREATIVE_ZEN)
 homegrid.c
 chapters.c
 mp4chapters.c

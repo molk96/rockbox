@@ -38,7 +38,7 @@ rockboxlogo.640x198x16.bmp
 #endif
 
 /* Custom full-screen boot splash for the Creative Zen X-Fi (not the bootloader) */
-#if defined(CREATIVE_ZENXFI) && !defined(BOOTLOADER)
+#if (defined(CREATIVE_ZENXFI) || defined(CREATIVE_ZEN)) && !defined(BOOTLOADER)
 zenxfisplash.320x240x16.bmp
 #endif
 

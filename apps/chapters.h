@@ -20,7 +20,7 @@
 #include "config.h"
 #include <stdbool.h>
 
-#if defined(CREATIVE_ZENXFI) && !defined(BOOTLOADER)
+#if (defined(CREATIVE_ZENXFI) || defined(CREATIVE_ZEN)) && !defined(BOOTLOADER)
 #define HAVE_CHAPTERS
 
 /* Lets the user pick a chapter of the book in folder dir and starts playing
